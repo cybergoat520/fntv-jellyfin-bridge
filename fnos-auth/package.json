@@ -1,0 +1,17 @@
+{
+  "name": "fnos-auth",
+  "version": "0.1.0",
+  "description": "飞牛影视登录模块 - 提供飞牛影视 API 认证能力",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "test": "node --test tests/*.test.ts",
+    "example": "node examples/login.ts"
+  },
+  "dependencies": {
+    "axios": "^1.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0"
+  }
+}

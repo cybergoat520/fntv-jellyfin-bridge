@@ -1,0 +1,6 @@
+[submodule "fntv-electron"]
+	path = fntv-electron
+	url = https://github.com/QiaoKes/fntv-electron.git
+[submodule "jellyfin"]
+	path = jellyfin
+	url = https://github.com/jellyfin/jellyfin.git
