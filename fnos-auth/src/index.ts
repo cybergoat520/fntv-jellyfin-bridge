@@ -5,6 +5,7 @@
 export { login } from './auth.ts';
 export { FnosClient } from './client.ts';
 export { generateAuthx, generateAuthxString, md5 } from './signature.ts';
+export { HttpMethod } from './types.ts';
 export type {
   LoginCredentials,
   LoginResult,
@@ -14,5 +15,4 @@ export type {
   FnosUserInfo,
   RequestResult,
   AuthxParams,
-  HttpMethod,
 } from './types.ts';

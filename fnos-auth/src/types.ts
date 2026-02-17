@@ -5,12 +5,14 @@
 // ============ 请求相关 ============
 
 /** HTTP 方法 */
-export enum HttpMethod {
-  GET = 'get',
-  POST = 'post',
-  PUT = 'put',
-  DELETE = 'delete',
-}
+export const HttpMethod = {
+  GET: 'get',
+  POST: 'post',
+  PUT: 'put',
+  DELETE: 'delete',
+} as const;
+
+export type HttpMethod = (typeof HttpMethod)[keyof typeof HttpMethod];
 
 /** 登录凭据 */
 export interface LoginCredentials {

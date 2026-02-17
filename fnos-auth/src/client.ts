@@ -8,7 +8,8 @@
  * - 签名错误自动重试
  */
 
-import axios, { AxiosInstance, AxiosResponse } from 'axios';
+import axios from 'axios';
+import type { AxiosInstance, AxiosResponse } from 'axios';
 import * as https from 'node:https';
 import { generateAuthxString, generateNonce } from './signature.ts';
 import type {
