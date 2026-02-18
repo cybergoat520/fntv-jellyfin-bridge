@@ -78,6 +78,15 @@ app.get('/Users/:userId/Items/:itemId', (c) => {
   return c.redirect(`/Items/${itemId}${url.search}`, 307);
 });
 
+// 根路径：Jellyfin 客户端用来验证服务器
+app.get('/', (c) => c.redirect('/web/index.html', 302));
+app.get('/web', (c) => c.redirect('/web/index.html', 302));
+app.get('/web/', (c) => c.redirect('/web/index.html', 302));
+app.get('/web/index.html', (c) => {
+  return c.html('<!DOCTYPE html><html><head><title>fnos-bridge</title></head><body><h1>fnos-bridge</h1><p>请使用 Jellyfin 客户端连接此服务器</p></body></html>');
+});
+app.get('/favicon.ico', (c) => c.body(null, 204));
+
 // 兜底：未实现的端点返回空响应而非 404
 app.all('*', (c) => {
   const path = c.req.path;

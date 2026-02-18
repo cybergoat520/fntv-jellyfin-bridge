@@ -5,7 +5,7 @@
 # ========== 配置区域 ==========
 
 # 飞牛 NAS 地址（必填，改成你的实际地址）
-export FNOS_SERVER="http://192.168.1.100:5666"
+export FNOS_SERVER="http://192.168.1.50:5666"
 
 # Bridge 监听端口（Jellyfin 客户端连接用）
 export BRIDGE_PORT="8096"
