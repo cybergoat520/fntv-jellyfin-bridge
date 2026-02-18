@@ -149,9 +149,9 @@ export function mapSubtitleStream(ss: any, index: number): MediaStreamInfo {
 }
 
 /**
- * 构造 MediaSourceInfo
+ * 构造单个 MediaSourceInfo（内部使用）
  */
-export function buildMediaSource(
+function buildSingleMediaSource(
   mediaGuid: string,
   fileName: string,
   videoStreams: any[],
@@ -169,10 +169,21 @@ export function buildMediaSource(
     mediaStreams.push(mapVideoStream(vs, streamIndex++));
   }
 
-  // 音频流
-  const defaultAudioIndex = streamIndex;
+  // 音频流 — 优先选择浏览器兼容的编解码器作为默认
+  const audioStartIndex = streamIndex;
   for (const as of audioStreams) {
     mediaStreams.push(mapAudioStream(as, streamIndex++));
+  }
+  // 浏览器通常支持的音频编解码器
+  const browserCompatibleCodecs = ['aac', 'mp3', 'flac', 'opus', 'vorbis', 'pcm_s16le', 'pcm_f32le'];
+  let defaultAudioIndex = audioStartIndex; // 默认第一条音频
+  // 优先找浏览器兼容的音频轨
+  for (let i = 0; i < audioStreams.length; i++) {
+    const codec = (audioStreams[i].codec_name || '').toLowerCase();
+    if (browserCompatibleCodecs.includes(codec)) {
+      defaultAudioIndex = audioStartIndex + i;
+      break;
+    }
   }
 
   // 字幕流
@@ -183,6 +194,17 @@ export function buildMediaSource(
   // 从文件名推断容器格式
   const container = fileName ? fileName.split('.').pop() || 'mkv' : 'mkv';
 
+  // 构造显示名称（包含清晰度信息）
+  const vs0 = videoStreams[0];
+  let displayName = fileName || 'Video';
+  if (vs0) {
+    displayName = formatVideoTitle(vs0);
+    if (fileInfo?.size) {
+      const sizeMB = Math.round(fileInfo.size / 1024 / 1024);
+      displayName += ` (${sizeMB > 1024 ? (sizeMB / 1024).toFixed(1) + 'GB' : sizeMB + 'MB'})`;
+    }
+  }
+
   return {
     Protocol: 'Http',
     Id: mediaGuid,
@@ -190,7 +212,7 @@ export function buildMediaSource(
     Type: 'Default',
     Container: container,
     Size: fileInfo?.size || undefined,
-    Name: fileName || 'Video',
+    Name: displayName,
     IsRemote: false,
     RunTimeTicks: duration > 0 ? secondsToTicks(duration) : undefined,
     SupportsTranscoding: false,
@@ -203,11 +225,80 @@ export function buildMediaSource(
     SupportsProbing: false,
     MediaStreams: mediaStreams,
     ReadAtNativeFramerate: false,
-    DefaultAudioStreamIndex: mediaStreams.length > 1 ? defaultAudioIndex : undefined,
+    DefaultAudioStreamIndex: audioStreams.length > 0 ? defaultAudioIndex : undefined,
     DirectStreamUrl: videoStreamUrl,
-    Bitrate: videoStreams[0]?.bps || undefined,
+    Bitrate: vs0?.bps || undefined,
     RequiredHttpHeaders: [],
   };
+}
+
+/**
+ * 旧版兼容：构造单个 MediaSource（不按 media_guid 分组）
+ */
+export function buildMediaSource(
+  mediaGuid: string,
+  fileName: string,
+  videoStreams: any[],
+  audioStreams: any[],
+  subtitleStreams: any[],
+  fileInfo: any,
+  duration: number,
+  videoStreamUrl: string,
+): MediaSourceInfo {
+  return buildSingleMediaSource(mediaGuid, fileName, videoStreams, audioStreams, subtitleStreams, fileInfo, duration, videoStreamUrl);
+}
+
+/**
+ * 按 media_guid 分组构造多个 MediaSource（支持多清晰度）
+ * 每个 media_guid 对应一个文件版本（如 4K、1080p）
+ */
+export function buildMediaSources(
+  itemId: string,
+  files: any[],
+  videoStreams: any[],
+  audioStreams: any[],
+  subtitleStreams: any[],
+  duration: number,
+): MediaSourceInfo[] {
+  // 按 media_guid 分组
+  const mediaGuids = new Set<string>();
+  for (const vs of videoStreams) {
+    if (vs.media_guid) mediaGuids.add(vs.media_guid);
+  }
+
+  // 如果没有 media_guid 或只有一个，退回旧逻辑
+  if (mediaGuids.size === 0) {
+    const fileInfo = files[0] || null;
+    const mediaGuid = fileInfo?.guid || 'unknown';
+    const fileName = fileInfo?.path?.split('/').pop() || 'video';
+    const videoStreamUrl = `/Videos/${itemId}/stream?static=true&mediaSourceId=${mediaGuid}`;
+    return [buildSingleMediaSource(mediaGuid, fileName, videoStreams, audioStreams, subtitleStreams, fileInfo, duration, videoStreamUrl)];
+  }
+
+  const sources: MediaSourceInfo[] = [];
+
+  // 按分辨率降序排列（高清在前）
+  const sortedGuids = [...mediaGuids].sort((a, b) => {
+    const vsA = videoStreams.find(v => v.media_guid === a);
+    const vsB = videoStreams.find(v => v.media_guid === b);
+    return (vsB?.height || 0) - (vsA?.height || 0);
+  });
+
+  for (const mg of sortedGuids) {
+    const myVideoStreams = videoStreams.filter(v => v.media_guid === mg);
+    const myAudioStreams = audioStreams.filter(a => a.media_guid === mg);
+    const mySubtitleStreams = subtitleStreams.filter(s => s.media_guid === mg);
+    const myFile = files.find(f => f.guid === mg) || null;
+    const fileName = myFile?.path?.split('/').pop() || 'video';
+    const videoStreamUrl = `/Videos/${itemId}/stream?static=true&mediaSourceId=${mg}`;
+
+    sources.push(buildSingleMediaSource(
+      mg, fileName, myVideoStreams, myAudioStreams, mySubtitleStreams,
+      myFile, duration, videoStreamUrl,
+    ));
+  }
+
+  return sources;
 }
 
 /** 解析帧率字符串 "24000/1001" → 23.976 */

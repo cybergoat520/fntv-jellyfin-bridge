@@ -7,7 +7,7 @@ import { Hono } from 'hono';
 import { randomUUID } from 'node:crypto';
 import { config } from '../config.ts';
 import { generateServerId, toFnosGuid } from '../mappers/id.ts';
-import { buildMediaSource, type PlaybackInfoResponse } from '../mappers/media.ts';
+import { buildMediaSources, type PlaybackInfoResponse } from '../mappers/media.ts';
 import { requireAuth } from '../middleware/auth.ts';
 import { fnosGetPlayInfo, fnosGetStreamList } from '../services/fnos.ts';
 import type { SessionData } from '../services/session.ts';
@@ -51,29 +51,20 @@ async function handlePlaybackInfo(c: any) {
     const subtitleStreams = streamData.subtitle_streams || [];
     const files = streamData.files || [];
 
-    // 构造视频流 URL（通过 bridge 代理）
-    const mediaGuid = playInfo.media_guid;
-    const videoStreamUrl = `/Videos/${itemId}/stream?static=true&mediaSourceId=${mediaGuid}`;
-
-    const mediaSource = buildMediaSource(
-      mediaGuid,
-      files[0]?.path?.split('/').pop() || 'video',
-      videoStreams,
-      audioStreams,
-      subtitleStreams,
-      files[0] || null,
+    // 按 media_guid 分组构造多个 MediaSource（支持多清晰度切换）
+    const mediaSources = buildMediaSources(
+      itemId, files, videoStreams, audioStreams, subtitleStreams,
       playInfo.item.duration || 0,
-      videoStreamUrl,
     );
 
     const playSessionId = randomUUID();
 
     const response: PlaybackInfoResponse = {
-      MediaSources: [mediaSource],
+      MediaSources: mediaSources,
       PlaySessionId: playSessionId,
     };
 
-    console.log(`[PLAYBACK] PlaybackInfo: item=${itemId}, mediaGuid=${mediaGuid}, container=${mediaSource.Container}, directPlay=${mediaSource.SupportsDirectPlay}, directStream=${mediaSource.SupportsDirectStream}`);
+    console.log(`[PLAYBACK] PlaybackInfo: item=${itemId}, sources=${mediaSources.length}, names=[${mediaSources.map(s => s.Name).join(', ')}]`);
 
     return c.json(response);
   } catch (e: any) {

@@ -7,7 +7,7 @@ import { Hono } from 'hono';
 import { config } from '../config.ts';
 import { generateServerId, toFnosGuid, toJellyfinId } from '../mappers/id.ts';
 import { mapPlayListItemToDto, mapPlayInfoToDto, makeCollectionFolder } from '../mappers/item.ts';
-import { buildMediaSource } from '../mappers/media.ts';
+import { buildMediaSources } from '../mappers/media.ts';
 import { requireAuth } from '../middleware/auth.ts';
 import { fnosGetItemList, fnosGetPlayInfo, fnosGetStreamList } from '../services/fnos.ts';
 import { setImageCache } from '../services/imageCache.ts';
@@ -201,20 +201,19 @@ items.get('/:itemId', requireAuth(), async (c) => {
         const streamResult = await fnosGetStreamList(session.fnosServer, session.fnosToken, fnosGuid);
         if (streamResult.success && streamResult.data) {
           const sd = streamResult.data;
-          const videoStreamUrl = `/Videos/${itemId}/stream?static=true&mediaSourceId=${playInfo.media_guid}`;
-          const mediaSource = buildMediaSource(
-            playInfo.media_guid,
-            sd.files?.[0]?.path?.split('/').pop() || 'video',
+          const mediaSources = buildMediaSources(
+            itemId,
+            sd.files || [],
             sd.video_streams || [],
             sd.audio_streams || [],
             sd.subtitle_streams || [],
-            sd.files?.[0] || null,
             playInfo.item.duration || 0,
-            videoStreamUrl,
           );
-          dto.MediaSources = [mediaSource];
+          dto.MediaSources = mediaSources;
           // jellyfin-web 的 getItem 调用期望顶层有 MediaStreams
-          (dto as any).MediaStreams = mediaSource.MediaStreams;
+          if (mediaSources.length > 0) {
+            (dto as any).MediaStreams = mediaSources[0].MediaStreams;
+          }
         }
       } catch {
         // 流信息获取失败不影响详情返回

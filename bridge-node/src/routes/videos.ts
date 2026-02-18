@@ -10,7 +10,7 @@ import * as https from 'node:https';
 import { config } from '../config.ts';
 import { toFnosGuid } from '../mappers/id.ts';
 import { requireAuth } from '../middleware/auth.ts';
-import { fnosGetPlayInfo, fnosGetStreamList, fnosGetStream } from '../services/fnos.ts';
+import { fnosGetPlayInfo, fnosGetStream } from '../services/fnos.ts';
 import { generateAuthxString } from '../fnos-client/signature.ts';
 import type { SessionData } from '../services/session.ts';
 
@@ -33,13 +33,18 @@ async function handleVideoStream(c: any) {
   }
 
   try {
-    // 获取播放信息以得到 mediaGuid
-    const playInfoResult = await fnosGetPlayInfo(session.fnosServer, session.fnosToken, fnosGuid);
-    if (!playInfoResult.success || !playInfoResult.data) {
-      return c.body('Play info not found', 404);
+    // 优先使用 URL 中的 mediaSourceId（用户选择的清晰度），否则从 playInfo 获取默认的
+    let mediaGuid = c.req.query('mediaSourceId');
+
+    if (!mediaGuid) {
+      const playInfoResult = await fnosGetPlayInfo(session.fnosServer, session.fnosToken, fnosGuid);
+      if (!playInfoResult.success || !playInfoResult.data) {
+        return c.body('Play info not found', 404);
+      }
+      mediaGuid = playInfoResult.data.media_guid;
     }
 
-    const mediaGuid = playInfoResult.data.media_guid;
+    console.log(`[VIDEO] 使用 mediaGuid=${mediaGuid}`);
 
     // 获取流信息（含直链等）
     const streamResult = await fnosGetStream(
