@@ -35,7 +35,7 @@ const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port: PORT }, as
     assert(res.status === 200, `status=${res.status}`);
     const data = await res.json() as any;
     assert(data.ServerName === 'fnos-bridge', `ServerName=${data.ServerName}`);
-    assert(data.Version === '10.10.6', `Version=${data.Version}`);
+    assert(data.Version === '10.12.0', `Version=${data.Version}`);
     assert(data.StartupWizardCompleted === true, 'StartupWizardCompleted');
     assert(typeof data.Id === 'string' && data.Id.length > 0, 'Id missing');
   });

@@ -48,7 +48,7 @@ export function parseAuthHeader(header: string | undefined): JellyfinAuthHeader 
  * 从请求中提取 token
  * 支持多种来源：Authorization header、X-Emby-Authorization header、api_key query param
  */
-function extractToken(c: Context): { token: string | undefined; parsed: JellyfinAuthHeader | null } {
+export function extractToken(c: Context): { token: string | undefined; parsed: JellyfinAuthHeader | null } {
   const authValue = c.req.header('Authorization') || c.req.header('X-Emby-Authorization');
   const parsed = parseAuthHeader(authValue);
 

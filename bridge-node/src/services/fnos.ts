@@ -114,6 +114,34 @@ export async function fnosGetPlayQuality(server: string, token: string, mediaGui
 }
 
 /**
+ * 启动播放/转码会话
+ * 必须在请求 HLS m3u8 之前调用，否则飞牛返回 410 Gone
+ * 返回 play_link 包含转码会话 GUID
+ */
+export async function fnosStartPlay(server: string, token: string, data: {
+  media_guid: string;
+  video_guid: string;
+  video_encoder: string;
+  resolution: string;
+  bitrate: number;
+  startTimestamp: number;
+  audio_encoder: string;
+  audio_guid: string;
+  subtitle_guid?: string;
+  channels: number;
+  forced_sdr?: number;
+}) {
+  const client = createFnosClient(server, token);
+  return client.request<{
+    play_link: string;
+    media_guid: string;
+    video_guid: string;
+    audio_guid: string;
+    hls_time: number;
+  }>('post' as HttpMethod, '/v/api/v1/play/play', data);
+}
+
+/**
  * 标记已观看
  */
 export async function fnosSetWatched(server: string, token: string, itemGuid: string) {

@@ -226,7 +226,7 @@ function buildSingleMediaSource(
     IsRemote: false,
     RunTimeTicks: duration > 0 ? secondsToTicks(duration) : undefined,
     SupportsTranscoding: needsTranscoding,
-    SupportsDirectStream: true,
+    SupportsDirectStream: !needsTranscoding,
     SupportsDirectPlay: false,
     IsInfiniteStream: false,
     RequiresOpening: false,

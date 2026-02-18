@@ -1,12 +1,16 @@
 /**
  * fnos-bridge 入口
  * 启动 HTTP + WebSocket 服务器
+ * 
+ * 视频流和 HLS 请求在 http.Server 层拦截，绕过 Hono 框架
+ * 使用原生 Node.js pipe() 实现真正的流式传输
  */
 
 import { serve } from '@hono/node-server';
 import { WebSocketServer, WebSocket } from 'ws';
 import app from './server.ts';
 import { config } from './config.ts';
+import { isVideoStreamPath, isHlsPath, handleVideoStream, handleHlsStream } from './proxy/stream.ts';
 
 console.log(`
 ╔══════════════════════════════════════╗
@@ -24,9 +28,46 @@ const server = serve({
   fetch: app.fetch,
   hostname: config.host,
   port: config.port,
+  overrideGlobalObjects: false,
 }, (info) => {
   console.log(`✅ 服务已启动: http://${info.address}:${info.port}`);
   console.log('等待 Jellyfin 客户端连接...\n');
+});
+
+// 设置服务器超时：不限制请求超时（大文件流式传输）
+const nativeServer = server as any;
+nativeServer.requestTimeout = 0;
+nativeServer.headersTimeout = 120_000;
+nativeServer.timeout = 0; // 不限制 socket 超时
+
+// 在 Hono 之前拦截视频流和 HLS 请求
+// @hono/node-server 的 serve() 返回 http.Server，其 'request' 事件已被绑定
+
+// 保存原始 request listener
+const listeners = nativeServer.listeners('request');
+nativeServer.removeAllListeners('request');
+
+// 添加拦截器：视频流和 HLS 走原生代理，其他走 Hono
+nativeServer.on('request', (req: any, res: any) => {
+  const url = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
+  const pathname = url.pathname;
+
+  // 视频流请求 → 原生流式代理
+  if (isVideoStreamPath(pathname)) {
+    handleVideoStream(req, res);
+    return;
+  }
+
+  // HLS 请求 → 原生流式代理
+  if (isHlsPath(pathname)) {
+    handleHlsStream(req, res);
+    return;
+  }
+
+  // 其他请求 → Hono 处理
+  for (const listener of listeners) {
+    listener.call(nativeServer, req, res);
+  }
 });
 
 // WebSocket 服务器 — jellyfin-web 需要 /socket 端点
@@ -61,10 +102,10 @@ wss.on('connection', (ws: WebSocket) => {
 });
 
 // 拦截 HTTP upgrade 请求，将 /socket 路径升级为 WebSocket
-(server as any).on('upgrade', (request: any, socket: any, head: any) => {
+nativeServer.on('upgrade', (request: any, socket: any, head: any) => {
   const url = new URL(request.url || '', `http://${request.headers.host}`);
   if (url.pathname === '/socket') {
-    wss.handleUpgrade(request, socket, head, (ws) => {
+    wss.handleUpgrade(request, socket, head, (ws: any) => {
       wss.emit('connection', ws, request);
     });
   } else {

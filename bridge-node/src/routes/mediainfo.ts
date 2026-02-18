@@ -6,10 +6,11 @@
 import { Hono } from 'hono';
 import { randomUUID } from 'node:crypto';
 import { config } from '../config.ts';
-import { generateServerId, toFnosGuid } from '../mappers/id.ts';
+import { generateServerId, toFnosGuid, registerMediaGuid } from '../mappers/id.ts';
 import { buildMediaSources, type PlaybackInfoResponse } from '../mappers/media.ts';
-import { requireAuth } from '../middleware/auth.ts';
+import { requireAuth, extractToken } from '../middleware/auth.ts';
 import { fnosGetPlayInfo, fnosGetStreamList } from '../services/fnos.ts';
+import { registerStreamMeta } from '../services/hls-session.ts';
 import type { SessionData } from '../services/session.ts';
 
 const mediainfo = new Hono();
@@ -28,6 +29,26 @@ async function handlePlaybackInfo(c: any) {
 
   if (!fnosGuid) {
     return c.json({ MediaSources: [], PlaySessionId: randomUUID() });
+  }
+
+  // 解析客户端请求参数（POST body 或 query params）
+  let enableDirectPlay: boolean | undefined;
+  let enableDirectStream: boolean | undefined;
+  try {
+    if (c.req.method === 'POST') {
+      const body = await c.req.json();
+      enableDirectPlay = body.EnableDirectPlay;
+      enableDirectStream = body.EnableDirectStream;
+    }
+  } catch { /* ignore parse errors */ }
+  // query params 也可能带这些参数
+  if (enableDirectPlay === undefined) {
+    const qDP = c.req.query('EnableDirectPlay');
+    if (qDP !== undefined) enableDirectPlay = qDP === 'true';
+  }
+  if (enableDirectStream === undefined) {
+    const qDS = c.req.query('EnableDirectStream');
+    if (qDS !== undefined) enableDirectStream = qDS === 'true';
   }
 
   try {
@@ -57,6 +78,49 @@ async function handlePlaybackInfo(c: any) {
       playInfo.item.duration || 0,
     );
 
+    // 获取当前用户 token，注入到 TranscodingUrl 中（hls.js 不发 Authorization header）
+    const { token: userToken } = extractToken(c);
+
+    // 为需要转码的 MediaSource 注册流元数据（HLS 代理启动转码时需要）
+    for (const ms of mediaSources) {
+      if (ms.SupportsTranscoding && ms.TranscodingUrl) {
+        // 找到该 mediaGuid 对应的视频流和音频流
+        const vs = videoStreams.find((v: any) => v.media_guid === ms.Id) || videoStreams[0];
+        const as = audioStreams.find((a: any) => a.media_guid === ms.Id) || audioStreams[0];
+        if (vs && as) {
+          registerStreamMeta(ms.Id, {
+            media_guid: ms.Id,
+            video_guid: vs.guid || '',
+            video_encoder: vs.codec_name || 'h264',
+            resolution: vs.resolution_type || (vs.height >= 2160 ? '4k' : vs.height >= 1080 ? '1080p' : '720p'),
+            bitrate: vs.bps || 15000000,
+            audio_encoder: 'aac', // 目标编码器始终用 aac（浏览器兼容）
+            audio_guid: as.guid || '',
+            subtitle_guid: '',
+            channels: as.channels || 2,
+          });
+        }
+      }
+    }
+
+    // 客户端请求禁用 DirectPlay/DirectStream 时，覆盖对应标志
+    // 这在播放出错重试时很重要，避免无限循环
+    for (const ms of mediaSources) {
+      if (enableDirectPlay === false) {
+        ms.SupportsDirectPlay = false;
+      }
+      if (enableDirectStream === false) {
+        ms.SupportsDirectStream = false;
+      }
+      // 在 TranscodingUrl 中注入 api_key，让 hls.js 能通过认证
+      if (ms.TranscodingUrl && userToken) {
+        const sep = ms.TranscodingUrl.includes('?') ? '&' : '?';
+        ms.TranscodingUrl = `${ms.TranscodingUrl}${sep}api_key=${userToken}`;
+      }
+      // 注册 media_guid → item_guid 映射
+      registerMediaGuid(ms.Id, fnosGuid);
+    }
+
     const playSessionId = randomUUID();
 
     const response: PlaybackInfoResponse = {
@@ -64,7 +128,7 @@ async function handlePlaybackInfo(c: any) {
       PlaySessionId: playSessionId,
     };
 
-    console.log(`[PLAYBACK] PlaybackInfo: item=${itemId}, sources=${mediaSources.length}, names=[${mediaSources.map(s => s.Name).join(', ')}]`);
+    console.log(`[PLAYBACK] PlaybackInfo: item=${itemId}, sources=${mediaSources.length}, enableDS=${enableDirectStream}, enableDP=${enableDirectPlay}`);
 
     return c.json(response);
   } catch (e: any) {

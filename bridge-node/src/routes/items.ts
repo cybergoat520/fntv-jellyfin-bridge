@@ -5,7 +5,7 @@
 
 import { Hono } from 'hono';
 import { config } from '../config.ts';
-import { generateServerId, toFnosGuid, toJellyfinId } from '../mappers/id.ts';
+import { generateServerId, toFnosGuid, toJellyfinId, registerMediaGuid } from '../mappers/id.ts';
 import { mapPlayListItemToDto, mapPlayInfoToDto, makeCollectionFolder } from '../mappers/item.ts';
 import { buildMediaSources } from '../mappers/media.ts';
 import { requireAuth } from '../middleware/auth.ts';
@@ -199,6 +199,7 @@ items.get('/:itemId', requireAuth(), async (c) => {
     if (dto.MediaType === 'Video' && playInfo.media_guid) {
       try {
         const streamResult = await fnosGetStreamList(session.fnosServer, session.fnosToken, fnosGuid);
+        console.log(`[ITEM] streamResult: success=${streamResult.success}, hasData=${!!streamResult.data}, videoStreams=${streamResult.data?.video_streams?.length || 0}, files=${streamResult.data?.files?.length || 0}`);
         if (streamResult.success && streamResult.data) {
           const sd = streamResult.data;
           const mediaSources = buildMediaSources(
@@ -210,6 +211,11 @@ items.get('/:itemId', requireAuth(), async (c) => {
             playInfo.item.duration || 0,
           );
           dto.MediaSources = mediaSources;
+          // 注册 media_guid → item_guid 映射，供 jellyfin-web 用 mediaSourceId 调用 getItem 时查找
+          for (const ms of mediaSources) {
+            registerMediaGuid(ms.Id, fnosGuid);
+          }
+          console.log(`[ITEM] MediaSources: count=${mediaSources.length}, names=[${mediaSources.map(s => s.Name).join(', ')}]`);
           // jellyfin-web 的 getItem 调用期望顶层有 MediaStreams
           if (mediaSources.length > 0) {
             (dto as any).MediaStreams = mediaSources[0].MediaStreams;
