@@ -101,11 +101,9 @@ async function handleVideoStream(c: any) {
       extraHeaders['Authx'] = generateAuthxString(mediaPath);
     }
 
-    // 透明代理：转发 Range 头
-    const rangeHeader = c.req.header('Range');
-    if (rangeHeader) {
-      extraHeaders['Range'] = rangeHeader;
-    }
+    // 透明代理：转发 Range 头（飞牛 range 端点要求有 Range 头）
+    const rangeHeader = c.req.header('Range') || 'bytes=0-';
+    extraHeaders['Range'] = rangeHeader;
 
     // 发起代理请求
     const proxyResponse = await axios({
