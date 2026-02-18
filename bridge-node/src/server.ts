@@ -18,6 +18,8 @@ import videosRoutes from './routes/videos.ts';
 import subtitlesRoutes from './routes/subtitles.ts';
 import playbackRoutes from './routes/playback.ts';
 import playstateRoutes from './routes/playstate.ts';
+import resumeRoutes from './routes/resume.ts';
+import favoritesRoutes from './routes/favorites.ts';
 
 const app = new Hono();
 
@@ -47,6 +49,10 @@ app.route('/Videos', subtitlesRoutes);
 app.route('/Sessions', playbackRoutes);
 app.route('/', playstateRoutes);
 
+// 继续观看和收藏
+app.route('/UserItems', resumeRoutes);
+app.route('/', favoritesRoutes);
+
 // 旧版路径兼容: /Users/{userId}/Views → /UserViews
 app.get('/Users/:userId/Views', (c) => {
   const url = new URL(c.req.url);
@@ -57,6 +63,12 @@ app.get('/Users/:userId/Views', (c) => {
 app.get('/Users/:userId/Items', (c) => {
   const url = new URL(c.req.url);
   return c.redirect(`/Items${url.search}`, 307);
+});
+
+// 旧版路径兼容: /Users/{userId}/Items/Resume → /UserItems/Resume
+app.get('/Users/:userId/Items/Resume', (c) => {
+  const url = new URL(c.req.url);
+  return c.redirect(`/UserItems/Resume${url.search}`, 307);
 });
 
 // 旧版路径兼容: /Users/{userId}/Items/{itemId} → /Items/{itemId}

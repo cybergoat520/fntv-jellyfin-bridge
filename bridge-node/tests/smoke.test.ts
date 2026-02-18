@@ -143,6 +143,34 @@ const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port: PORT }, as
     assert(res.status === 401, `expected 401, got ${res.status}`);
   });
 
+  // ---- 第五阶段：增强功能 ----
+
+  await test('GET /UserItems/Resume 需要认证', async () => {
+    const res = await fetch(`${base}/UserItems/Resume`);
+    assert(res.status === 401, `expected 401, got ${res.status}`);
+  });
+
+  await test('POST /UserFavoriteItems/:itemId 需要认证', async () => {
+    const res = await fetch(`${base}/UserFavoriteItems/fake-item-id`, {
+      method: 'POST',
+    });
+    assert(res.status === 401, `expected 401, got ${res.status}`);
+  });
+
+  await test('DELETE /UserFavoriteItems/:itemId 需要认证', async () => {
+    const res = await fetch(`${base}/UserFavoriteItems/fake-item-id`, {
+      method: 'DELETE',
+    });
+    assert(res.status === 401, `expected 401, got ${res.status}`);
+  });
+
+  await test('GET /Users/:userId/Items/Resume 重定向', async () => {
+    const res = await fetch(`${base}/Users/fake-user/Items/Resume`, { redirect: 'manual' });
+    assert(res.status === 307, `expected 307, got ${res.status}`);
+    const loc = res.headers.get('location') || '';
+    assert(loc.includes('/UserItems/Resume'), `location=${loc}`);
+  });
+
   console.log(`\n📊 结果: ${passed} 通过, ${failed} 失败\n`);
 
   server.close();

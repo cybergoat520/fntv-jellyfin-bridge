@@ -15,6 +15,17 @@ const items = new Hono();
 
 const serverId = generateServerId(config.fnosServer);
 
+/** 飞牛类型 → Jellyfin 类型（用于过滤） */
+function mapFnosTypeToJellyfin(type: string): string {
+  switch (type) {
+    case 'Movie': return 'Movie';
+    case 'Episode': return 'Episode';
+    case 'TV': case 'Series': return 'Series';
+    case 'Season': return 'Season';
+    default: return 'Video';
+  }
+}
+
 /**
  * GET /Items - 获取媒体列表
  * Jellyfin 客户端用各种查询参数来获取不同的列表
@@ -25,6 +36,10 @@ items.get('/', requireAuth(), async (c) => {
   const searchTerm = c.req.query('SearchTerm') || c.req.query('searchTerm');
   const startIndex = parseInt(c.req.query('StartIndex') || '0', 10);
   const limit = parseInt(c.req.query('Limit') || '50', 10);
+  const sortBy = c.req.query('SortBy') || c.req.query('sortBy') || '';
+  const sortOrder = c.req.query('SortOrder') || c.req.query('sortOrder') || 'Ascending';
+  const filters = c.req.query('Filters') || c.req.query('filters') || '';
+  const includeItemTypes = c.req.query('IncludeItemTypes') || c.req.query('includeItemTypes') || '';
 
   // 如果有 parentId，转换为飞牛 GUID 并查询
   if (parentId) {
@@ -33,24 +48,66 @@ items.get('/', requireAuth(), async (c) => {
       return c.json({ Items: [], TotalRecordCount: 0, StartIndex: startIndex });
     }
 
+    // 映射排序参数
+    let sortColumn = 'sort_title';
+    if (sortBy.includes('DateCreated') || sortBy.includes('DatePlayed')) sortColumn = 'air_date';
+    else if (sortBy.includes('CommunityRating')) sortColumn = 'vote_average';
+    else if (sortBy.includes('SortName') || sortBy.includes('Name')) sortColumn = 'sort_title';
+    const sortType = sortOrder === 'Descending' ? 'DESC' : 'ASC';
+
     try {
       const result = await fnosGetItemList(session.fnosServer, session.fnosToken, {
         parent_guid: fnosGuid,
         exclude_folder: 1,
-        sort_column: 'sort_title',
-        sort_type: 'ASC',
+        sort_column: sortColumn,
+        sort_type: sortType,
       });
 
       if (!result.success || !result.data) {
         return c.json({ Items: [], TotalRecordCount: 0, StartIndex: startIndex });
       }
 
-      const allItems = result.data.list.map(item => mapPlayListItemToDto(item, serverId));
-      const paged = allItems.slice(startIndex, startIndex + limit);
+      let items = result.data.list;
+
+      // 搜索过滤
+      if (searchTerm) {
+        const term = searchTerm.toLowerCase();
+        items = items.filter(i =>
+          (i.title && i.title.toLowerCase().includes(term)) ||
+          (i.tv_title && i.tv_title.toLowerCase().includes(term))
+        );
+      }
+
+      // 类型过滤
+      if (includeItemTypes) {
+        const types = includeItemTypes.split(',').map(t => t.trim());
+        items = items.filter(i => types.includes(mapFnosTypeToJellyfin(i.type)));
+      }
+
+      // IsResumable 过滤：有播放进度但未看完
+      if (filters.includes('IsResumable')) {
+        items = items.filter(i => i.ts > 0 && i.watched !== 1);
+      }
+
+      // IsFavorite 过滤
+      if (filters.includes('IsFavorite')) {
+        items = items.filter(i => i.is_favorite === 1);
+      }
+
+      // IsPlayed / IsUnplayed 过滤
+      if (filters.includes('IsPlayed')) {
+        items = items.filter(i => i.watched === 1);
+      }
+      if (filters.includes('IsUnplayed')) {
+        items = items.filter(i => i.watched !== 1);
+      }
+
+      const allDtos = items.map(item => mapPlayListItemToDto(item, serverId));
+      const paged = allDtos.slice(startIndex, startIndex + limit);
 
       return c.json({
         Items: paged,
-        TotalRecordCount: result.data.total || allItems.length,
+        TotalRecordCount: allDtos.length,
         StartIndex: startIndex,
       });
     } catch (e: any) {
