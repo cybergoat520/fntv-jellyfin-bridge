@@ -15,8 +15,11 @@ const serverId = generateServerId(config.fnosServer);
 
 /** GET /System/Info/Public - 公开系统信息（无需认证） */
 system.get('/Info/Public', (c) => {
+  // 从请求头动态获取地址，避免返回 0.0.0.0
+  const host = c.req.header('host') || `${config.host}:${config.port}`;
+  const proto = c.req.header('x-forwarded-proto') || 'http';
   const info: PublicSystemInfo = {
-    LocalAddress: `http://${config.host}:${config.port}`,
+    LocalAddress: `${proto}://${host}`,
     ServerName: config.serverName,
     Version: config.jellyfinVersion,
     ProductName: 'Jellyfin Server',
@@ -29,8 +32,10 @@ system.get('/Info/Public', (c) => {
 
 /** GET /System/Info - 完整系统信息（需要认证） */
 system.get('/Info', requireAuth(), (c) => {
+  const host = c.req.header('host') || `${config.host}:${config.port}`;
+  const proto = c.req.header('x-forwarded-proto') || 'http';
   const info: SystemInfo = {
-    LocalAddress: `http://${config.host}:${config.port}`,
+    LocalAddress: `${proto}://${host}`,
     ServerName: config.serverName,
     Version: config.jellyfinVersion,
     ProductName: 'Jellyfin Server',
