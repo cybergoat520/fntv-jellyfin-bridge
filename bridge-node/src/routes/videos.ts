@@ -11,6 +11,7 @@ import { config } from '../config.ts';
 import { toFnosGuid } from '../mappers/id.ts';
 import { requireAuth } from '../middleware/auth.ts';
 import { fnosGetPlayInfo, fnosGetStreamList, fnosGetStream } from '../services/fnos.ts';
+import { generateAuthxString } from '../fnos-client/signature.ts';
 import type { SessionData } from '../services/session.ts';
 
 const videos = new Hono();
@@ -24,6 +25,8 @@ async function handleVideoStream(c: any) {
   const session = c.get('session') as SessionData;
   const itemId = c.req.param('itemId');
   const fnosGuid = toFnosGuid(itemId);
+
+  console.log(`[VIDEO] 流请求: itemId=${itemId}, fnosGuid=${fnosGuid}, range=${c.req.header('Range') || 'none'}`);
 
   if (!fnosGuid) {
     return c.body('Item not found', 404);
@@ -78,15 +81,19 @@ async function handleVideoStream(c: any) {
         }
       } else {
         // 本地 NAS 模式
-        targetUrl = `${session.fnosServer}/v/api/v1/media/range/${mediaGuid}`;
+        const mediaPath = `/v/api/v1/media/range/${mediaGuid}`;
+        targetUrl = `${session.fnosServer}${mediaPath}`;
         extraHeaders['Authorization'] = session.fnosToken;
         extraHeaders['Cookie'] = 'mode=relay';
+        extraHeaders['Authx'] = generateAuthxString(mediaPath);
       }
     } else {
       // 降级：直接用 NAS 地址
-      targetUrl = `${session.fnosServer}/v/api/v1/media/range/${mediaGuid}`;
+      const mediaPath = `/v/api/v1/media/range/${mediaGuid}`;
+      targetUrl = `${session.fnosServer}${mediaPath}`;
       extraHeaders['Authorization'] = session.fnosToken;
       extraHeaders['Cookie'] = 'mode=relay';
+      extraHeaders['Authx'] = generateAuthxString(mediaPath);
     }
 
     // 透明代理：转发 Range 头
@@ -135,10 +142,8 @@ async function handleVideoStream(c: any) {
 }
 
 videos.get('/:itemId/stream', requireAuth(), handleVideoStream);
-videos.get('/:itemId/stream.:container', requireAuth(), handleVideoStream);
 
 // HEAD 请求也需要支持（某些客户端先 HEAD 探测）
 videos.on('HEAD', '/:itemId/stream', requireAuth(), handleVideoStream);
-videos.on('HEAD', '/:itemId/stream.:container', requireAuth(), handleVideoStream);
 
 export default videos;

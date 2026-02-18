@@ -7,8 +7,9 @@ import { Hono } from 'hono';
 import { config } from '../config.ts';
 import { generateServerId, toFnosGuid, toJellyfinId } from '../mappers/id.ts';
 import { mapPlayListItemToDto, mapPlayInfoToDto, makeCollectionFolder } from '../mappers/item.ts';
+import { buildMediaSource } from '../mappers/media.ts';
 import { requireAuth } from '../middleware/auth.ts';
-import { fnosGetItemList, fnosGetPlayInfo } from '../services/fnos.ts';
+import { fnosGetItemList, fnosGetPlayInfo, fnosGetStreamList } from '../services/fnos.ts';
 import { setImageCache } from '../services/imageCache.ts';
 import type { SessionData } from '../services/session.ts';
 
@@ -189,7 +190,37 @@ items.get('/:itemId', requireAuth(), async (c) => {
       return c.json({ error: 'Item not found' }, 404);
     }
 
-    const dto = mapPlayInfoToDto(result.data, serverId);
+    const playInfo = result.data;
+    console.log(`[ITEM] 详情: guid=${fnosGuid}, type=${playInfo.item.type}, media_guid=${playInfo.media_guid}, can_play=${playInfo.item.can_play}`);
+    const dto = mapPlayInfoToDto(playInfo, serverId);
+    console.log(`[ITEM] DTO: Type=${dto.Type}, MediaType=${dto.MediaType}, Name=${dto.Name}`);
+
+    // 对可播放项目，获取流信息并附加 MediaSources
+    if (dto.MediaType === 'Video' && playInfo.media_guid) {
+      try {
+        const streamResult = await fnosGetStreamList(session.fnosServer, session.fnosToken, fnosGuid);
+        if (streamResult.success && streamResult.data) {
+          const sd = streamResult.data;
+          const videoStreamUrl = `/Videos/${itemId}/stream?static=true&mediaSourceId=${playInfo.media_guid}`;
+          const mediaSource = buildMediaSource(
+            playInfo.media_guid,
+            sd.files?.[0]?.path?.split('/').pop() || 'video',
+            sd.video_streams || [],
+            sd.audio_streams || [],
+            sd.subtitle_streams || [],
+            sd.files?.[0] || null,
+            playInfo.item.duration || 0,
+            videoStreamUrl,
+          );
+          dto.MediaSources = [mediaSource];
+          // jellyfin-web 的 getItem 调用期望顶层有 MediaStreams
+          (dto as any).MediaStreams = mediaSource.MediaStreams;
+        }
+      } catch {
+        // 流信息获取失败不影响详情返回
+      }
+    }
+
     return c.json(dto);
   } catch (e: any) {
     console.error('获取项目详情失败:', e.message);

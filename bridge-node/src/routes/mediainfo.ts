@@ -73,6 +73,8 @@ async function handlePlaybackInfo(c: any) {
       PlaySessionId: playSessionId,
     };
 
+    console.log(`[PLAYBACK] PlaybackInfo: item=${itemId}, mediaGuid=${mediaGuid}, container=${mediaSource.Container}, directPlay=${mediaSource.SupportsDirectPlay}, directStream=${mediaSource.SupportsDirectStream}`);
+
     return c.json(response);
   } catch (e: any) {
     console.error('获取播放信息失败:', e.message);

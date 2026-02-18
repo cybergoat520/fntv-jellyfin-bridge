@@ -12,9 +12,11 @@
   "dependencies": {
     "@hono/node-server": "^1.13.0",
     "axios": "^1.7.0",
-    "hono": "^4.7.0"
+    "hono": "^4.7.0",
+    "ws": "^8.19.0"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0"
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1"
   }
 }

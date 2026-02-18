@@ -81,6 +81,18 @@ const pathSegmentMap: Record<string, string> = {
   'logo': 'Logo',
   'banner': 'Banner',
   'views': 'Views',
+  'stream': 'stream',
+  'subtitles': 'Subtitles',
+  'intros': 'Intros',
+  'similar': 'Similar',
+  'thememedia': 'ThemeMedia',
+  'specialfeatures': 'SpecialFeatures',
+  'syncplay': 'SyncPlay',
+  'list': 'List',
+  'studios': 'Studios',
+  'endpoint': 'Endpoint',
+  'playback': 'Playback',
+  'bitratetest': 'BitrateTest',
 };
 
 app.use('*', async (c, next) => {
@@ -90,8 +102,15 @@ app.use('*', async (c, next) => {
 
   const segments = originalPath.split('/');
   let changed = false;
+
   for (let i = 0; i < segments.length; i++) {
     const lower = segments[i].toLowerCase();
+    // 处理 stream.xxx 扩展名：stream.mkv → stream（去掉扩展名，Hono 不支持 :param 带点号）
+    if (lower.startsWith('stream.') && segments[i - 1] && segments[i - 2]?.toLowerCase() === 'videos') {
+      segments[i] = 'stream';
+      changed = true;
+      continue;
+    }
     if (pathSegmentMap[lower] && segments[i] !== pathSegmentMap[lower]) {
       segments[i] = pathSegmentMap[lower];
       changed = true;
@@ -163,6 +182,50 @@ app.get('/DisplayPreferences/:id', (c) => {
   });
 });
 app.post('/DisplayPreferences/:id', (c) => c.body(null, 204));
+
+// Intros - 播放前的片头（不支持，返回空）
+app.get('/Items/:itemId/Intros', (c) => {
+  return c.json({ Items: [], TotalRecordCount: 0, StartIndex: 0 });
+});
+app.get('/Users/:userId/Items/:itemId/Intros', (c) => {
+  return c.json({ Items: [], TotalRecordCount: 0, StartIndex: 0 });
+});
+
+// Similar - 相似推荐（返回空）
+app.get('/Items/:itemId/Similar', (c) => {
+  return c.json({ Items: [], TotalRecordCount: 0, StartIndex: 0 });
+});
+
+// ThemeMedia - 主题音乐/视频（返回空）
+app.get('/Items/:itemId/ThemeMedia', (c) => {
+  return c.json({ ThemeVideosResult: { Items: [], TotalRecordCount: 0 }, ThemeSongsResult: { Items: [], TotalRecordCount: 0 }, SoundtrackSongsResult: { Items: [], TotalRecordCount: 0 } });
+});
+
+// SpecialFeatures - 特别收录（返回空）
+app.get('/Items/:itemId/SpecialFeatures', (c) => c.json([]));
+app.get('/Users/:userId/Items/:itemId/SpecialFeatures', (c) => c.json([]));
+
+// SyncPlay - 不支持
+app.get('/SyncPlay/List', (c) => c.json([]));
+
+// Studios - 工作室列表（返回空）
+app.get('/Studios', (c) => {
+  return c.json({ Items: [], TotalRecordCount: 0, StartIndex: 0 });
+});
+
+// System/Endpoint - 客户端端点信息
+app.get('/System/Endpoint', (c) => {
+  return c.json({ IsLocal: true, IsInNetwork: true });
+});
+
+// Playback/BitrateTest - 带宽测试
+app.get('/Playback/BitrateTest', (c) => {
+  const size = parseInt(c.req.query('Size') || '500000', 10);
+  // 返回指定大小的随机数据，模拟带宽测试
+  const data = new Uint8Array(Math.min(size, 1000000));
+  c.header('Content-Type', 'application/octet-stream');
+  return c.body(data, 200);
+});
 
 // 旧版路径兼容: /Users/{userId}/Views → /UserViews
 app.get('/Users/:userId/Views', (c) => {

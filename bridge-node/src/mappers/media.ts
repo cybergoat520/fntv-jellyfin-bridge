@@ -31,6 +31,12 @@ export interface MediaSourceInfo {
   DefaultSubtitleStreamIndex?: number;
   DirectStreamUrl?: string;
   Bitrate?: number;
+  RequiredHttpHeaders: any[];
+  TranscodingUrl?: string;
+  TranscodingSubProtocol?: string;
+  TranscodingContainer?: string;
+  VideoType?: string;
+  ETag?: string;
 }
 
 /** Jellyfin MediaStream */
@@ -189,7 +195,7 @@ export function buildMediaSource(
     RunTimeTicks: duration > 0 ? secondsToTicks(duration) : undefined,
     SupportsTranscoding: false,
     SupportsDirectStream: true,
-    SupportsDirectPlay: true,
+    SupportsDirectPlay: false,
     IsInfiniteStream: false,
     RequiresOpening: false,
     RequiresClosing: false,
@@ -200,6 +206,7 @@ export function buildMediaSource(
     DefaultAudioStreamIndex: mediaStreams.length > 1 ? defaultAudioIndex : undefined,
     DirectStreamUrl: videoStreamUrl,
     Bitrate: videoStreams[0]?.bps || undefined,
+    RequiredHttpHeaders: [],
   };
 }
 
