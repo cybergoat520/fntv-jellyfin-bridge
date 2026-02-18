@@ -1,9 +1,12 @@
 /**
  * 会话管理服务
  * 管理 Jellyfin AccessToken → 飞牛凭据的映射
+ * 支持文件持久化，重启不丢失会话
  */
 
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 
 export interface SessionData {
   /** 飞牛 token */
@@ -28,6 +31,40 @@ export interface SessionData {
 /** AccessToken → SessionData */
 const sessions = new Map<string, SessionData>();
 
+/** 持久化文件路径 */
+const SESSION_FILE = path.resolve(import.meta.dirname || '.', '..', '.sessions.json');
+
+/** 从文件加载会话 */
+function loadSessions(): void {
+  try {
+    if (fs.existsSync(SESSION_FILE)) {
+      const data = JSON.parse(fs.readFileSync(SESSION_FILE, 'utf-8'));
+      for (const [key, value] of Object.entries(data)) {
+        sessions.set(key, value as SessionData);
+      }
+      console.log(`[SESSION] 已恢复 ${sessions.size} 个会话`);
+    }
+  } catch {
+    // 文件损坏或不存在，忽略
+  }
+}
+
+/** 保存会话到文件 */
+function saveSessions(): void {
+  try {
+    const data: Record<string, SessionData> = {};
+    for (const [key, value] of sessions) {
+      data[key] = value;
+    }
+    fs.writeFileSync(SESSION_FILE, JSON.stringify(data, null, 2));
+  } catch {
+    // 写入失败，忽略
+  }
+}
+
+// 启动时加载
+loadSessions();
+
 /**
  * 创建新会话，返回 Jellyfin AccessToken
  */
@@ -39,6 +76,7 @@ export function createSession(data: Omit<SessionData, 'createdAt' | 'lastActivit
     createdAt: now,
     lastActivity: now,
   });
+  saveSessions();
   return accessToken;
 }
 
@@ -57,7 +95,9 @@ export function getSession(accessToken: string): SessionData | null {
  * 删除会话
  */
 export function removeSession(accessToken: string): boolean {
-  return sessions.delete(accessToken);
+  const result = sessions.delete(accessToken);
+  if (result) saveSessions();
+  return result;
 }
 
 /**

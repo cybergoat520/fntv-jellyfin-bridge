@@ -5,6 +5,9 @@
 
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import { serveStatic } from '@hono/node-server/serve-static';
+import fs from 'node:fs';
+import path from 'node:path';
 import { logger } from './middleware/logger.ts';
 import systemRoutes from './routes/system.ts';
 import brandingRoutes from './routes/branding.ts';
@@ -27,16 +30,99 @@ const app = new Hono();
 app.use('*', cors());
 app.use('*', logger());
 
+// 路径大小写规范化中间件
+// jellyfin-web 发送的 API 路径可能是小写（如 /Users/authenticatebyname）
+// 但 Hono 路由匹配是大小写敏感的，需要将已知路径段规范化为 PascalCase
+const pathSegmentMap: Record<string, string> = {
+  'system': 'System',
+  'info': 'Info',
+  'public': 'Public',
+  'ping': 'Ping',
+  'branding': 'Branding',
+  'configuration': 'Configuration',
+  'css': 'Css',
+  'css.css': 'Css.css',
+  'users': 'Users',
+  'authenticatebyname': 'AuthenticateByName',
+  'me': 'Me',
+  'userviews': 'UserViews',
+  'items': 'Items',
+  'resume': 'Resume',
+  'shows': 'Shows',
+  'seasons': 'Seasons',
+  'episodes': 'Episodes',
+  'images': 'Images',
+  'playbackinfo': 'PlaybackInfo',
+  'videos': 'Videos',
+  'sessions': 'Sessions',
+  'playing': 'Playing',
+  'progress': 'Progress',
+  'stopped': 'Stopped',
+  'capabilities': 'Capabilities',
+  'full': 'Full',
+  'userplayeditems': 'UserPlayedItems',
+  'useritems': 'UserItems',
+  'userfavoriteitems': 'UserFavoriteItems',
+  'favoriteitems': 'FavoriteItems',
+  'playeditems': 'PlayedItems',
+  'quickconnect': 'QuickConnect',
+  'enabled': 'Enabled',
+  'displaypreferences': 'DisplayPreferences',
+  'localization': 'Localization',
+  'countries': 'Countries',
+  'cultures': 'Cultures',
+  'parentalratings': 'ParentalRatings',
+  'filters': 'Filters',
+  'nextup': 'NextUp',
+  'latest': 'Latest',
+  'primary': 'Primary',
+  'backdrop': 'Backdrop',
+  'thumb': 'Thumb',
+  'logo': 'Logo',
+  'banner': 'Banner',
+  'views': 'Views',
+};
+
+app.use('*', async (c, next) => {
+  const originalPath = c.req.path;
+  // 跳过静态文件
+  if (originalPath.startsWith('/web/')) return next();
+
+  const segments = originalPath.split('/');
+  let changed = false;
+  for (let i = 0; i < segments.length; i++) {
+    const lower = segments[i].toLowerCase();
+    if (pathSegmentMap[lower] && segments[i] !== pathSegmentMap[lower]) {
+      segments[i] = pathSegmentMap[lower];
+      changed = true;
+    }
+  }
+  if (changed) {
+    const newPath = segments.join('/');
+    const url = new URL(c.req.url);
+    url.pathname = newPath;
+    // 内部重写：构造新请求，保留 method/headers/body，让 Hono 重新路由
+    const newReq = new Request(url.toString(), {
+      method: c.req.method,
+      headers: c.req.raw.headers,
+      body: c.req.raw.body,
+      // @ts-ignore - duplex needed for streaming body
+      duplex: 'half',
+    });
+    return app.fetch(newReq);
+  }
+  return next();
+});
+
 // 路由挂载
 app.route('/System', systemRoutes);
 app.route('/Branding', brandingRoutes);
 app.route('/Users', usersRoutes);
 app.route('/UserViews', viewsRoutes);
+// 图片路由需要在 items 路由之前挂载，避免 /:itemId 先匹配
+app.route('/Items', imagesRoutes);
 app.route('/Items', itemsRoutes);
 app.route('/Shows', showsRoutes);
-
-// 图片路由需要挂载在 /Items 下
-app.route('/Items', imagesRoutes);
 
 // PlaybackInfo 挂载在 /Items 下
 app.route('/Items', mediainfoRoutes);
@@ -52,6 +138,31 @@ app.route('/', playstateRoutes);
 // 继续观看和收藏
 app.route('/UserItems', resumeRoutes);
 app.route('/', favoritesRoutes);
+
+// QuickConnect - 不支持
+app.get('/QuickConnect/Enabled', (c) => c.json(false));
+
+// Sessions/Capabilities - 客户端能力上报
+app.post('/Sessions/Capabilities', (c) => c.body(null, 204));
+app.post('/Sessions/Capabilities/Full', (c) => c.body(null, 204));
+
+// Localization 端点
+app.get('/Localization/Countries', (c) => c.json([]));
+app.get('/Localization/Cultures', (c) => c.json([]));
+app.get('/Localization/ParentalRatings', (c) => c.json([]));
+
+// DisplayPreferences
+app.get('/DisplayPreferences/:id', (c) => {
+  return c.json({
+    Id: c.req.param('id') || 'usersettings',
+    SortBy: 'SortName',
+    SortOrder: 'Ascending',
+    RememberIndexing: false,
+    RememberSorting: false,
+    CustomPrefs: {},
+  });
+});
+app.post('/DisplayPreferences/:id', (c) => c.body(null, 204));
 
 // 旧版路径兼容: /Users/{userId}/Views → /UserViews
 app.get('/Users/:userId/Views', (c) => {
@@ -78,13 +189,30 @@ app.get('/Users/:userId/Items/:itemId', (c) => {
   return c.redirect(`/Items/${itemId}${url.search}`, 307);
 });
 
-// 根路径：Jellyfin 客户端用来验证服务器
+// 根路径重定向到 web UI
 app.get('/', (c) => c.redirect('/web/index.html', 302));
 app.get('/web', (c) => c.redirect('/web/index.html', 302));
 app.get('/web/', (c) => c.redirect('/web/index.html', 302));
-app.get('/web/index.html', (c) => {
-  return c.html('<!DOCTYPE html><html><head><title>fnos-bridge</title></head><body><h1>fnos-bridge</h1><p>请使用 Jellyfin 客户端连接此服务器</p></body></html>');
-});
+
+// Jellyfin Web UI 静态文件托管
+const webDir = path.resolve(import.meta.dirname || '.', '..', 'web');
+const hasWebUI = fs.existsSync(path.join(webDir, 'index.html'));
+
+if (hasWebUI) {
+  console.log(`[WEB] Jellyfin Web UI: ${webDir}`);
+  // /web/foo.js → 从 bridge-node/web/foo.js 提供
+  app.get('/web/*', serveStatic({
+    root: './',
+    rewriteRequestPath: (p) => p.replace(/^\/web/, '/web'),
+  }));
+} else {
+  console.log('[WEB] 未找到 Jellyfin Web UI，WebView 客户端（Xbox/安卓官方）将无法使用');
+  console.log(`[WEB] 运行 scripts/build-web.sh 构建 Web UI 到 ${webDir}`);
+  app.get('/web/*', (c) => {
+    return c.html('<!DOCTYPE html><html><head><title>fnos-bridge</title></head><body><h1>fnos-bridge</h1><p>Jellyfin Web UI 未安装。请运行 <code>scripts/build-web.sh</code> 构建。</p><p>或使用原生客户端（Findroid / Swiftfin / Jellyfin Media Player）连接。</p></body></html>');
+  });
+}
+
 app.get('/favicon.ico', (c) => c.body(null, 204));
 
 // 兜底：未实现的端点返回空响应而非 404

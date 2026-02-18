@@ -45,25 +45,60 @@ export function parseAuthHeader(header: string | undefined): JellyfinAuthHeader 
 }
 
 /**
+ * 从请求中提取 token
+ * 支持多种来源：Authorization header、X-Emby-Authorization header、api_key query param
+ */
+function extractToken(c: Context): { token: string | undefined; parsed: JellyfinAuthHeader | null } {
+  const authValue = c.req.header('Authorization') || c.req.header('X-Emby-Authorization');
+  const parsed = parseAuthHeader(authValue);
+
+  // 优先从 header 中获取 token
+  if (parsed?.token) {
+    return { token: parsed.token, parsed };
+  }
+
+  // 其次从 query parameter 获取（jellyfin-web 使用 api_key）
+  const apiKey = c.req.query('api_key') || c.req.query('ApiKey');
+  if (apiKey) {
+    return { token: apiKey, parsed };
+  }
+
+  // 也支持 X-MediaBrowser-Token header
+  const xToken = c.req.header('X-MediaBrowser-Token') || c.req.header('X-Emby-Token');
+  if (xToken) {
+    return { token: xToken, parsed };
+  }
+
+  // 如果 Authorization header 不是 MediaBrowser 格式，可能直接是 token
+  if (authValue && !parsed) {
+    // 可能是 "Bearer xxx" 或直接是 token
+    const bearerMatch = authValue.match(/^Bearer\s+(.+)$/i);
+    const rawToken = bearerMatch ? bearerMatch[1] : authValue;
+    return { token: rawToken, parsed: null };
+  }
+
+  return { token: undefined, parsed };
+}
+
+/**
  * 认证中间件 - 需要有效会话
  * 用于需要登录的端点
  */
 export function requireAuth() {
   return async (c: Context, next: Next) => {
-    const authValue = c.req.header('Authorization') || c.req.header('X-Emby-Authorization');
-    const parsed = parseAuthHeader(authValue);
+    const { token, parsed } = extractToken(c);
 
-    if (!parsed?.token) {
+    if (!token) {
       return c.json({ error: 'Unauthorized' }, 401);
     }
 
-    const session = getSession(parsed.token);
+    const session = getSession(token);
     if (!session) {
       return c.json({ error: 'Invalid or expired token' }, 401);
     }
 
     c.set('session', session);
-    c.set('authHeader', parsed);
+    if (parsed) c.set('authHeader', parsed);
     await next();
   };
 }
@@ -74,11 +109,10 @@ export function requireAuth() {
  */
 export function optionalAuth() {
   return async (c: Context, next: Next) => {
-    const authValue = c.req.header('Authorization') || c.req.header('X-Emby-Authorization');
-    const parsed = parseAuthHeader(authValue);
+    const { token, parsed } = extractToken(c);
 
-    if (parsed?.token) {
-      const session = getSession(parsed.token);
+    if (token) {
+      const session = getSession(token);
       if (session) {
         c.set('session', session);
       }

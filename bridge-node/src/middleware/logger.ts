@@ -26,8 +26,11 @@ export function logger() {
 
     const ms = Date.now() - start;
     const status = c.res.status;
-    const color = status >= 400 ? '\x1b[31m' : status >= 300 ? '\x1b[33m' : '\x1b[32m';
-    const queryStr = query ? `?${query.slice(0, 100)}` : '';
-    console.log(`${color}${method}\x1b[0m ${path}${queryStr} → ${status} (${ms}ms) \x1b[36m[${clientAddr}]\x1b[0m`);
+    // 只输出非 200 的请求
+    if (status >= 300) {
+      const color = status >= 400 ? '\x1b[31m' : '\x1b[33m';
+      const queryStr = query ? `?${query.slice(0, 100)}` : '';
+      console.log(`${color}${method}\x1b[0m ${path}${queryStr} → ${status} (${ms}ms) \x1b[36m[${clientAddr}]\x1b[0m`);
+    }
   };
 }

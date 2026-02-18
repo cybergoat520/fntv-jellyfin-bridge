@@ -6,12 +6,13 @@
   "scripts": {
     "start": "node --experimental-strip-types src/index.ts",
     "dev": "node --experimental-strip-types --watch src/index.ts",
-    "test": "node --experimental-strip-types --test tests/**/*.test.ts"
+    "test": "node --experimental-strip-types --test tests/**/*.test.ts",
+    "build:web": "cd ../jellyfin-web && npm ci && npx cross-env NODE_ENV=production webpack --config webpack.prod.js && cd ../bridge-node && node -e \"const fs=require('fs');fs.cpSync('../jellyfin-web/dist','./web',{recursive:true,force:true});console.log('Web UI copied to bridge-node/web/')\""
   },
   "dependencies": {
-    "hono": "^4.7.0",
     "@hono/node-server": "^1.13.0",
-    "axios": "^1.7.0"
+    "axios": "^1.7.0",
+    "hono": "^4.7.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0"

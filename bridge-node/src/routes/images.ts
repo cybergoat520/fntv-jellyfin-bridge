@@ -1,58 +1,57 @@
 /**
  * 图片代理路由
  * 代理飞牛影视的海报和剧照图片
+ * 
+ * 图片 URL 在列表查询时已缓存到 imageCache，
+ * 这里直接用缓存的 poster 路径代理，不需要认证。
  */
 
 import { Hono } from 'hono';
+import { getImageCache, setImageCache } from '../services/imageCache.ts';
 import { toFnosGuid } from '../mappers/id.ts';
 import { optionalAuth } from '../middleware/auth.ts';
 import { fnosGetPlayInfo } from '../services/fnos.ts';
-import { FnosClient } from '../fnos-client/client.ts';
+import { generateAuthxString } from '../fnos-client/signature.ts';
 import { config } from '../config.ts';
 import type { SessionData } from '../services/session.ts';
 
 const images = new Hono();
 
 /**
- * 图片缓存：itemId → { poster, backdrop }
- * 避免每次请求图片都调用飞牛 API
- */
-const imageCache = new Map<string, { poster?: string; backdrop?: string; server?: string; token?: string }>();
-
-/**
  * GET /Items/:itemId/Images/:imageType
  * GET /Items/:itemId/Images/:imageType/:imageIndex
+ * 
+ * 不要求认证 — 浏览器 <img> 标签不会带 auth header
+ * 优先从 imageCache 获取 poster URL，fallback 到 fnosGetPlayInfo
  */
 images.get('/:itemId/Images/:imageType/:imageIndex?', optionalAuth(), async (c) => {
-  const session = c.get('session') as SessionData | undefined;
   const itemId = c.req.param('itemId');
   const imageType = c.req.param('imageType');
 
-  if (!session) {
-    return c.body(null, 401);
-  }
+  // 1. 先查缓存
+  let cached = getImageCache(itemId);
 
-  const fnosGuid = toFnosGuid(itemId);
-  if (!fnosGuid) {
-    return c.body(null, 404);
-  }
-
-  // 查缓存
-  let cached = imageCache.get(itemId);
+  // 2. 缓存未命中，尝试用 session 调 API
   if (!cached) {
-    try {
-      const result = await fnosGetPlayInfo(session.fnosServer, session.fnosToken, fnosGuid);
-      if (result.success && result.data) {
-        cached = {
-          poster: result.data.item.posters,
-          backdrop: result.data.item.still_path,
-          server: session.fnosServer,
-          token: session.fnosToken,
-        };
-        imageCache.set(itemId, cached);
+    const session = c.get('session') as SessionData | undefined;
+    if (session) {
+      const fnosGuid = toFnosGuid(itemId);
+      if (fnosGuid) {
+        try {
+          const result = await fnosGetPlayInfo(session.fnosServer, session.fnosToken, fnosGuid);
+          if (result.success && result.data) {
+            cached = {
+              poster: result.data.item.posters,
+              backdrop: result.data.item.still_path,
+              server: session.fnosServer,
+              token: session.fnosToken,
+            };
+            setImageCache(itemId, cached);
+          }
+        } catch {
+          // ignore
+        }
       }
-    } catch {
-      return c.body(null, 404);
     }
   }
 
@@ -80,28 +79,54 @@ images.get('/:itemId/Images/:imageType/:imageIndex?', optionalAuth(), async (c) 
     return c.body(null, 404);
   }
 
-  // 代理飞牛图片
-  const server = cached.server || session.fnosServer;
-  const token = cached.token || session.fnosToken;
-  const imageUrl = imagePath.startsWith('http') ? imagePath : `${server}${imagePath}`;
+  // 构造完整图片 URL
+  // 飞牛的 poster 路径格式: /xx/yy/hash.webp
+  // 完整 API 路径: /v/api/v1/sys/img/xx/yy/hash.webp
+  const server = cached.server;
+  let imageUrl: string;
+  if (imagePath.startsWith('http')) {
+    imageUrl = imagePath;
+  } else if (imagePath.startsWith('/v/api/')) {
+    imageUrl = `${server}${imagePath}`;
+  } else {
+    // poster 路径是相对的，需要加上 /v/api/v1/sys/img 前缀
+    const cleanPath = imagePath.startsWith('/') ? imagePath : `/${imagePath}`;
+    imageUrl = `${server}/v/api/v1/sys/img${cleanPath}`;
+  }
+
+  // 添加尺寸参数
+  const fillWidth = c.req.query('fillWidth') || c.req.query('maxWidth');
+  let finalUrl = imageUrl;
+  if (fillWidth && !imageUrl.includes('w=')) {
+    const sep = imageUrl.includes('?') ? '&' : '?';
+    finalUrl = `${imageUrl}${sep}w=${fillWidth}`;
+  }
 
   try {
-    const client = new FnosClient(server, token, { ignoreCert: config.ignoreCert });
-    // 直接用 axios 获取图片
-    const axios = (await import('axios')).default;
-    const response = await axios.get(imageUrl, {
-      responseType: 'arraybuffer',
+    // 从 URL 中提取 API 路径用于签名
+    const urlObj = new URL(finalUrl);
+    const apiPath = urlObj.pathname;
+    const authx = generateAuthxString(apiPath);
+    const token = cached.token || '';
+
+    const resp = await fetch(finalUrl, {
       headers: {
-        'Authorization': token,
         'Cookie': 'mode=relay',
+        'Authx': authx,
+        'Authorization': token,
       },
-      timeout: 15000,
     });
 
-    const contentType = response.headers['content-type'] || 'image/jpeg';
+    if (!resp.ok) {
+      return c.body(null, resp.status as any);
+    }
+
+    const contentType = resp.headers.get('content-type') || 'image/jpeg';
+    const body = await resp.arrayBuffer();
+
     c.header('Content-Type', contentType);
     c.header('Cache-Control', 'public, max-age=86400');
-    return c.body(response.data);
+    return c.body(new Uint8Array(body));
   } catch (e: any) {
     console.error('图片代理失败:', e.message);
     return c.body(null, 502);

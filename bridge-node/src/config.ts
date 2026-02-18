@@ -23,6 +23,6 @@ export const config: BridgeConfig = {
   host: process.env.BRIDGE_HOST || '0.0.0.0',
   fnosServer: process.env.FNOS_SERVER || 'http://localhost:5666',
   ignoreCert: process.env.FNOS_IGNORE_CERT === 'true',
-  jellyfinVersion: '10.10.6',
+  jellyfinVersion: '10.12.0',
   serverName: process.env.SERVER_NAME || 'fnos-bridge',
 };

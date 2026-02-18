@@ -99,6 +99,13 @@ users.post('/AuthenticateByName', async (c) => {
 });
 
 /**
+ * GET /Users/Public - 公开用户列表（登录页显示）
+ */
+users.get('/Public', (c) => {
+  return c.json([]);
+});
+
+/**
  * GET /Users/Me - 获取当前用户信息
  */
 users.get('/Me', requireAuth(), async (c) => {
@@ -141,7 +148,7 @@ users.get('/:userId', requireAuth(), async (c) => {
 });
 
 /**
- * GET /Users - 获取用户列表（返回空列表，不支持公开用户列表）
+ * GET /Users - 获取用户列表（返回空列表）
  */
 users.get('/', (c) => {
   return c.json([]);

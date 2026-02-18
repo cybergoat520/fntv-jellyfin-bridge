@@ -27,6 +27,7 @@ system.get('/Info/Public', (c) => {
     Id: serverId,
     StartupWizardCompleted: true,
   };
+  console.log('[DEBUG] /System/Info/Public 响应:', JSON.stringify(info));
   return c.json(info);
 });
 

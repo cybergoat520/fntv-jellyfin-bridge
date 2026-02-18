@@ -29,6 +29,7 @@ export async function fnosLogin(server: string, username: string, password: stri
   });
 
   if (!result.success) {
+    console.log(`[AUTH] 飞牛登录失败: server=${server}, user=${username}, error=${result.message}`);
     return { success: false as const, error: result.message || '登录失败' };
   }
 

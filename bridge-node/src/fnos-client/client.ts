@@ -105,6 +105,8 @@ export class FnosClient {
       headers['Authorization'] = this.token;
     }
 
+    console.log(`[FNOS] ${method.toUpperCase()} ${fullUrl} (retries=${retriesLeft})`);
+
     for (let attempt = 0; attempt <= retriesLeft; attempt++) {
       try {
         let response: AxiosResponse<FnosApiResponse<T>>;
@@ -169,6 +171,7 @@ export class FnosClient {
         return { success: true, data: res.data };
 
       } catch (error: any) {
+        console.log(`[FNOS] 请求失败 (attempt ${attempt + 1}/${retriesLeft + 1}): ${error.code || ''} ${error.message}`);
         if (this.isCertificateError(error)) {
           return { success: false, message: error.message, certificateError: true };
         }

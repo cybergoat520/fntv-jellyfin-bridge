@@ -4,3 +4,9 @@
 [submodule "jellyfin"]
 	path = jellyfin
 	url = https://github.com/jellyfin/jellyfin.git
+[submodule "jellyfin-web"]
+	path = jellyfin-web
+	url = https://github.com/jellyfin/jellyfin-web.git
+[submodule "bridge-node/jellyfin-xbox"]
+	path = jellyfin-xbox
+	url = https://github.com/jellyfin/jellyfin-xbox.git

@@ -64,6 +64,7 @@ function mapType(fnosType: string): string {
     case 'TV':
     case 'Series': return 'Series';
     case 'Season': return 'Season';
+    case 'Directory': return 'Folder';
     default: return 'Video';
   }
 }
@@ -114,7 +115,7 @@ export function mapPlayListItemToDto(
   serverId: string,
 ): BaseItemDto {
   const jellyfinType = mapType(item.type);
-  const isFolder = ['Series', 'Season'].includes(jellyfinType);
+  const isFolder = ['Series', 'Season', 'Folder'].includes(jellyfinType);
   const duration = item.duration || (item.runtime ? item.runtime * 60 : 0);
 
   const dto: BaseItemDto = {

@@ -5,10 +5,11 @@
 
 import { Hono } from 'hono';
 import { config } from '../config.ts';
-import { generateServerId, toFnosGuid } from '../mappers/id.ts';
-import { mapPlayListItemToDto, mapPlayInfoToDto } from '../mappers/item.ts';
+import { generateServerId, toFnosGuid, toJellyfinId } from '../mappers/id.ts';
+import { mapPlayListItemToDto, mapPlayInfoToDto, makeCollectionFolder } from '../mappers/item.ts';
 import { requireAuth } from '../middleware/auth.ts';
 import { fnosGetItemList, fnosGetPlayInfo } from '../services/fnos.ts';
+import { setImageCache } from '../services/imageCache.ts';
 import type { SessionData } from '../services/session.ts';
 
 const items = new Hono();
@@ -43,9 +44,15 @@ items.get('/', requireAuth(), async (c) => {
 
   // 如果有 parentId，转换为飞牛 GUID 并查询
   if (parentId) {
-    const fnosGuid = toFnosGuid(parentId);
+    let fnosGuid = toFnosGuid(parentId);
     if (!fnosGuid) {
       return c.json({ Items: [], TotalRecordCount: 0, StartIndex: startIndex });
+    }
+
+    // 虚拟媒体库 ID 需要特殊处理：用空 parent_guid 获取根目录
+    const isVirtualView = fnosGuid.startsWith('view_');
+    if (isVirtualView) {
+      fnosGuid = '';
     }
 
     // 映射排序参数
@@ -56,18 +63,27 @@ items.get('/', requireAuth(), async (c) => {
     const sortType = sortOrder === 'Descending' ? 'DESC' : 'ASC';
 
     try {
+      console.log(`[ITEMS] 查询列表: parent_guid=${fnosGuid}, parentId=${parentId}, isVirtualView=${isVirtualView}`);
       const result = await fnosGetItemList(session.fnosServer, session.fnosToken, {
         parent_guid: fnosGuid,
-        exclude_folder: 1,
+        exclude_folder: isVirtualView ? 0 : 1,
         sort_column: sortColumn,
         sort_type: sortType,
       });
 
       if (!result.success || !result.data) {
+        console.log(`[ITEMS] 查询失败: ${result.message}`);
         return c.json({ Items: [], TotalRecordCount: 0, StartIndex: startIndex });
       }
 
-      let items = result.data.list;
+      let items = result.data.list || [];
+      console.log(`[ITEMS] 查询结果: ${items.length} 条, mdb_name=${result.data.mdb_name}, mdb_category=${result.data.mdb_category}, top_dir=${result.data.top_dir}`);
+      if (isVirtualView && items.length > 0) {
+        console.log(`[ITEMS] 首条: guid=${items[0].guid}, type=${items[0].type}, title=${items[0].title}`);
+      }
+      if (isVirtualView && items.length === 0) {
+        console.log(`[ITEMS] 虚拟视图返回空，原始数据:`, JSON.stringify(result.data).slice(0, 500));
+      }
 
       // 搜索过滤
       if (searchTerm) {
@@ -102,7 +118,18 @@ items.get('/', requireAuth(), async (c) => {
         items = items.filter(i => i.watched !== 1);
       }
 
-      const allDtos = items.map(item => mapPlayListItemToDto(item, serverId));
+      const allDtos = items.map(item => {
+        const dto = mapPlayListItemToDto(item, serverId);
+        // 缓存 poster URL，供图片代理路由使用
+        if (item.poster) {
+          setImageCache(dto.Id, {
+            poster: item.poster,
+            server: session.fnosServer,
+            token: session.fnosToken,
+          });
+        }
+        return dto;
+      });
       const paged = allDtos.slice(startIndex, startIndex + limit);
 
       return c.json({
@@ -121,12 +148,36 @@ items.get('/', requireAuth(), async (c) => {
 });
 
 /**
+ * GET /Items/Filters - 获取过滤器选项
+ */
+items.get('/Filters', requireAuth(), (c) => {
+  return c.json({
+    Genres: [],
+    Tags: [],
+    OfficialRatings: [],
+    Years: [],
+  });
+});
+
+/**
  * GET /Items/:itemId - 获取单个项目详情
  */
 items.get('/:itemId', requireAuth(), async (c) => {
   const session = c.get('session') as SessionData;
   const itemId = c.req.param('itemId');
   const fnosGuid = toFnosGuid(itemId);
+
+  // 处理虚拟媒体库 ID（CollectionFolder）
+  if (fnosGuid && fnosGuid.startsWith('view_')) {
+    const viewMap: Record<string, { name: string; type: string }> = {
+      'view_movies': { name: '电影', type: 'movies' },
+      'view_tvshows': { name: '电视剧', type: 'tvshows' },
+    };
+    const view = viewMap[fnosGuid];
+    if (view) {
+      return c.json(makeCollectionFolder(view.name, itemId, serverId, view.type));
+    }
+  }
 
   if (!fnosGuid) {
     return c.json({ error: 'Item not found' }, 404);
@@ -144,15 +195,6 @@ items.get('/:itemId', requireAuth(), async (c) => {
     console.error('获取项目详情失败:', e.message);
     return c.json({ error: 'Internal error' }, 500);
   }
-});
-
-/**
- * GET /Items/:itemId/Images/:imageType - 图片代理
- * 这里先做一个简单的重定向到飞牛的图片 URL
- */
-items.get('/:itemId/Images/:imageType', async (c) => {
-  // 图片代理在 images.ts 中实现，这里做兜底
-  return c.json({}, 404);
 });
 
 /**
