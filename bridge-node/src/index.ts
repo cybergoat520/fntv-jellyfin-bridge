@@ -54,13 +54,19 @@ nativeServer.on('request', (req: any, res: any) => {
 
   // 视频流请求 → 原生流式代理
   if (isVideoStreamPath(pathname)) {
-    handleVideoStream(req, res);
+    handleVideoStream(req, res).catch((e: any) => {
+      console.error('[VIDEO] 未捕获异常:', e.message);
+      if (!res.headersSent) { res.writeHead(500); res.end('Internal error'); }
+    });
     return;
   }
 
   // HLS 请求 → 原生流式代理
   if (isHlsPath(pathname)) {
-    handleHlsStream(req, res);
+    handleHlsStream(req, res).catch((e: any) => {
+      console.error('[HLS] 未捕获异常:', e.message);
+      if (!res.headersSent) { res.writeHead(500); res.end('Internal error'); }
+    });
     return;
   }
 

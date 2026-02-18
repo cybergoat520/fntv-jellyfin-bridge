@@ -209,11 +209,10 @@ function buildSingleMediaSource(
   const hasCompatibleAudio = audioStreams.some(a =>
     browserCompatibleCodecs.includes((a.codec_name || '').toLowerCase())
   );
-  // 如果没有兼容音频，启用转码（飞牛 HLS 转码）
+  // 如果没有兼容音频，必须转码；否则优先 DirectStream 但也提供转码后备
   const needsTranscoding = audioStreams.length > 0 && !hasCompatibleAudio;
-  const transcodingUrl = needsTranscoding
-    ? `/Videos/${mediaGuid}/hls/main.m3u8`
-    : undefined;
+  // 始终提供 TranscodingUrl 作为后备（视频编解码器可能浏览器不支持，如 HEVC HDR10）
+  const transcodingUrl = `/Videos/${mediaGuid}/hls/main.m3u8`;
 
   return {
     Protocol: 'Http',
@@ -225,7 +224,7 @@ function buildSingleMediaSource(
     Name: displayName,
     IsRemote: false,
     RunTimeTicks: duration > 0 ? secondsToTicks(duration) : undefined,
-    SupportsTranscoding: needsTranscoding,
+    SupportsTranscoding: true,  // 始终支持转码后备
     SupportsDirectStream: !needsTranscoding,
     SupportsDirectPlay: false,
     IsInfiniteStream: false,
@@ -240,8 +239,8 @@ function buildSingleMediaSource(
     Bitrate: vs0?.bps || undefined,
     RequiredHttpHeaders: [],
     TranscodingUrl: transcodingUrl,
-    TranscodingSubProtocol: needsTranscoding ? 'hls' : undefined,
-    TranscodingContainer: needsTranscoding ? 'ts' : undefined,
+    TranscodingSubProtocol: 'hls',
+    TranscodingContainer: 'ts',
   };
 }
 

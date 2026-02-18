@@ -343,5 +343,8 @@ export async function handleHlsStream(
 
   const headers = buildUpstreamHeaders(req, extra);
 
+  // 设置 no-cache 头，防止浏览器缓存 HLS 响应（避免缓存 410 等错误）
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+
   pipeProxy(targetUrl, headers, config.ignoreCert, req, res, 'HLS');
 }

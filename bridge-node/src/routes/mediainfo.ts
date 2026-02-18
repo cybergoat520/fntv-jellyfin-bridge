@@ -34,11 +34,13 @@ async function handlePlaybackInfo(c: any) {
   // 解析客户端请求参数（POST body 或 query params）
   let enableDirectPlay: boolean | undefined;
   let enableDirectStream: boolean | undefined;
+  let mediaSourceId: string | undefined;
   try {
     if (c.req.method === 'POST') {
       const body = await c.req.json();
       enableDirectPlay = body.EnableDirectPlay;
       enableDirectStream = body.EnableDirectStream;
+      mediaSourceId = body.MediaSourceId;
     }
   } catch { /* ignore parse errors */ }
   // query params 也可能带这些参数
@@ -49,6 +51,10 @@ async function handlePlaybackInfo(c: any) {
   if (enableDirectStream === undefined) {
     const qDS = c.req.query('EnableDirectStream');
     if (qDS !== undefined) enableDirectStream = qDS === 'true';
+  }
+  if (!mediaSourceId) {
+    const qMS = c.req.query('MediaSourceId');
+    if (qMS) mediaSourceId = qMS;
   }
 
   try {
@@ -81,26 +87,31 @@ async function handlePlaybackInfo(c: any) {
     // 获取当前用户 token，注入到 TranscodingUrl 中（hls.js 不发 Authorization header）
     const { token: userToken } = extractToken(c);
 
-    // 为需要转码的 MediaSource 注册流元数据（HLS 代理启动转码时需要）
+    // 为所有 MediaSource 注册流元数据（HLS 转码后备需要）
     for (const ms of mediaSources) {
-      if (ms.SupportsTranscoding && ms.TranscodingUrl) {
-        // 找到该 mediaGuid 对应的视频流和音频流
-        const vs = videoStreams.find((v: any) => v.media_guid === ms.Id) || videoStreams[0];
-        const as = audioStreams.find((a: any) => a.media_guid === ms.Id) || audioStreams[0];
-        if (vs && as) {
-          registerStreamMeta(ms.Id, {
-            media_guid: ms.Id,
-            video_guid: vs.guid || '',
-            video_encoder: vs.codec_name || 'h264',
-            resolution: vs.resolution_type || (vs.height >= 2160 ? '4k' : vs.height >= 1080 ? '1080p' : '720p'),
-            bitrate: vs.bps || 15000000,
-            audio_encoder: 'aac', // 目标编码器始终用 aac（浏览器兼容）
-            audio_guid: as.guid || '',
-            subtitle_guid: '',
-            channels: as.channels || 2,
-          });
-        }
+      const vs = videoStreams.find((v: any) => v.media_guid === ms.Id) || videoStreams[0];
+      const as = audioStreams.find((a: any) => a.media_guid === ms.Id) || audioStreams[0];
+      if (vs && as) {
+        registerStreamMeta(ms.Id, {
+          media_guid: ms.Id,
+          video_guid: vs.guid || '',
+          video_encoder: vs.codec_name || 'h264',
+          resolution: vs.resolution_type || (vs.height >= 2160 ? '4k' : vs.height >= 1080 ? '1080p' : '720p'),
+          bitrate: vs.bps || 15000000,
+          audio_encoder: 'aac', // 目标编码器始终用 aac（浏览器兼容）
+          audio_guid: as.guid || '',
+          subtitle_guid: '',
+          channels: as.channels || 2,
+        });
       }
+    }
+
+    // 如果客户端指定了 MediaSourceId，只返回对应的 MediaSource
+    // 这在用户选择特定版本（如 4K vs 1080p）时很重要
+    let filteredSources = mediaSources;
+    if (mediaSourceId) {
+      const matched = mediaSources.filter(ms => ms.Id === mediaSourceId);
+      if (matched.length > 0) filteredSources = matched;
     }
 
     // 客户端请求禁用 DirectPlay/DirectStream 时，覆盖对应标志
@@ -124,11 +135,11 @@ async function handlePlaybackInfo(c: any) {
     const playSessionId = randomUUID();
 
     const response: PlaybackInfoResponse = {
-      MediaSources: mediaSources,
+      MediaSources: filteredSources,
       PlaySessionId: playSessionId,
     };
 
-    console.log(`[PLAYBACK] PlaybackInfo: item=${itemId}, sources=${mediaSources.length}, enableDS=${enableDirectStream}, enableDP=${enableDirectPlay}`);
+    console.log(`[PLAYBACK] PlaybackInfo: item=${itemId}, sources=${filteredSources.length}/${mediaSources.length}, mediaSourceId=${mediaSourceId || 'none'}, enableDS=${enableDirectStream}, enableDP=${enableDirectPlay}`);
 
     return c.json(response);
   } catch (e: any) {
