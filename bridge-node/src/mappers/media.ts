@@ -205,6 +205,16 @@ function buildSingleMediaSource(
     }
   }
 
+  // 检测是否所有音频都是浏览器不兼容的编解码器
+  const hasCompatibleAudio = audioStreams.some(a =>
+    browserCompatibleCodecs.includes((a.codec_name || '').toLowerCase())
+  );
+  // 如果没有兼容音频，启用转码（飞牛 HLS 转码）
+  const needsTranscoding = audioStreams.length > 0 && !hasCompatibleAudio;
+  const transcodingUrl = needsTranscoding
+    ? `/Videos/${mediaGuid}/hls/main.m3u8`
+    : undefined;
+
   return {
     Protocol: 'Http',
     Id: mediaGuid,
@@ -215,7 +225,7 @@ function buildSingleMediaSource(
     Name: displayName,
     IsRemote: false,
     RunTimeTicks: duration > 0 ? secondsToTicks(duration) : undefined,
-    SupportsTranscoding: false,
+    SupportsTranscoding: needsTranscoding,
     SupportsDirectStream: true,
     SupportsDirectPlay: false,
     IsInfiniteStream: false,
@@ -229,6 +239,9 @@ function buildSingleMediaSource(
     DirectStreamUrl: videoStreamUrl,
     Bitrate: vs0?.bps || undefined,
     RequiredHttpHeaders: [],
+    TranscodingUrl: transcodingUrl,
+    TranscodingSubProtocol: needsTranscoding ? 'hls' : undefined,
+    TranscodingContainer: needsTranscoding ? 'ts' : undefined,
   };
 }
 

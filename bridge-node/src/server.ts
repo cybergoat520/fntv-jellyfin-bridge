@@ -18,6 +18,7 @@ import showsRoutes from './routes/shows.ts';
 import imagesRoutes from './routes/images.ts';
 import mediainfoRoutes from './routes/mediainfo.ts';
 import videosRoutes from './routes/videos.ts';
+import hlsRoutes from './routes/hls.ts';
 import subtitlesRoutes from './routes/subtitles.ts';
 import playbackRoutes from './routes/playback.ts';
 import playstateRoutes from './routes/playstate.ts';
@@ -93,6 +94,10 @@ const pathSegmentMap: Record<string, string> = {
   'endpoint': 'Endpoint',
   'playback': 'Playback',
   'bitratetest': 'BitrateTest',
+  'hls': 'hls',
+  'main.m3u8': 'main.m3u8',
+  'preset.m3u8': 'preset.m3u8',
+  'subtitle.m3u8': 'subtitle.m3u8',
 };
 
 app.use('*', async (c, next) => {
@@ -146,8 +151,9 @@ app.route('/Shows', showsRoutes);
 // PlaybackInfo 挂载在 /Items 下
 app.route('/Items', mediainfoRoutes);
 
-// 视频流和字幕
+// 视频流、HLS 转码和字幕
 app.route('/Videos', videosRoutes);
+app.route('/Videos', hlsRoutes);  // HLS 转码代理
 app.route('/Videos', subtitlesRoutes);
 
 // 播放状态同步
