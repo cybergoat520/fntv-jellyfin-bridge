@@ -17,6 +17,35 @@ const items = new Hono();
 
 const serverId = generateServerId(config.fnosServer);
 
+/** item/list 短期缓存，避免收藏夹等场景重复请求飞牛 */
+const itemListCache = new Map<string, { data: any; ts: number; pending?: Promise<any> }>();
+const ITEM_LIST_CACHE_TTL = 5_000; // 5 秒
+
+async function cachedGetItemList(server: string, token: string, req: { parent_guid: string; exclude_folder: number; sort_column: string; sort_type: string }) {
+  const key = `${server}:${req.parent_guid}:${req.exclude_folder}:${req.sort_column}:${req.sort_type}`;
+  const cached = itemListCache.get(key);
+
+  // 缓存命中
+  if (cached && (Date.now() - cached.ts) < ITEM_LIST_CACHE_TTL) {
+    return cached.pending || cached.data;
+  }
+
+  // 并发去重：用 Promise 确保同一 key 只发一次请求
+  console.log(`[CACHE] item/list MISS: key=${key}`);
+  const pending = fnosGetItemList(server, token, req).then(result => {
+    itemListCache.set(key, { data: result, ts: Date.now() });
+    return result;
+  });
+  itemListCache.set(key, { data: null, ts: Date.now(), pending });
+
+  // 清理过期缓存
+  for (const [k, v] of itemListCache) {
+    if (Date.now() - v.ts > ITEM_LIST_CACHE_TTL && !v.pending) itemListCache.delete(k);
+  }
+
+  return pending;
+}
+
 /** 飞牛类型 → Jellyfin 类型（用于过滤） */
 function mapFnosTypeToJellyfin(type: string): string {
   switch (type) {
@@ -65,7 +94,7 @@ items.get('/', requireAuth(), async (c) => {
 
     try {
       console.log(`[ITEMS] 查询列表: parent_guid=${fnosGuid}, parentId=${parentId}, isVirtualView=${isVirtualView}`);
-      const result = await fnosGetItemList(session.fnosServer, session.fnosToken, {
+      const result = await cachedGetItemList(session.fnosServer, session.fnosToken, {
         parent_guid: fnosGuid,
         exclude_folder: isVirtualView ? 0 : 1,
         sort_column: sortColumn,
@@ -144,7 +173,87 @@ items.get('/', requireAuth(), async (c) => {
     }
   }
 
-  // 无 parentId 时返回空列表
+  // 无 parentId 但有 Recursive 查询（如收藏夹、全局搜索）
+  // 遍历所有媒体库汇总结果
+  const recursive = c.req.query('Recursive') || c.req.query('recursive');
+  if (recursive === 'true' && (filters || searchTerm || includeItemTypes)) {
+    let allItems: any[] = [];
+
+    let sortColumn = 'sort_title';
+    if (sortBy.includes('DateCreated') || sortBy.includes('DatePlayed')) sortColumn = 'air_date';
+    else if (sortBy.includes('CommunityRating')) sortColumn = 'vote_average';
+    else if (sortBy.includes('SortName') || sortBy.includes('Name')) sortColumn = 'sort_title';
+    const sortType = sortOrder === 'Descending' ? 'DESC' : 'ASC';
+
+    // 用空 parent_guid 获取所有媒体库根目录内容
+    try {
+      const result = await cachedGetItemList(session.fnosServer, session.fnosToken, {
+        parent_guid: '',
+        exclude_folder: 1,
+        sort_column: sortColumn,
+        sort_type: sortType,
+      });
+      if (result.success && result.data) {
+        allItems = result.data.list || [];
+      }
+    } catch {
+      // 忽略错误
+    }
+
+    // 搜索过滤
+    if (searchTerm) {
+      const term = searchTerm.toLowerCase();
+      allItems = allItems.filter(i =>
+        (i.title && i.title.toLowerCase().includes(term)) ||
+        (i.tv_title && i.tv_title.toLowerCase().includes(term))
+      );
+    }
+
+    // 类型过滤
+    if (includeItemTypes) {
+      const types = includeItemTypes.split(',').map(t => t.trim());
+      allItems = allItems.filter(i => types.includes(mapFnosTypeToJellyfin(i.type)));
+    }
+
+    // IsFavorite 过滤
+    if (filters.includes('IsFavorite')) {
+      allItems = allItems.filter(i => i.is_favorite === 1);
+    }
+
+    // IsResumable 过滤
+    if (filters.includes('IsResumable')) {
+      allItems = allItems.filter(i => i.ts > 0 && i.watched !== 1);
+    }
+
+    // IsPlayed / IsUnplayed 过滤
+    if (filters.includes('IsPlayed')) {
+      allItems = allItems.filter(i => i.watched === 1);
+    }
+    if (filters.includes('IsUnplayed')) {
+      allItems = allItems.filter(i => i.watched !== 1);
+    }
+
+    const allDtos = allItems.map(item => {
+      const dto = mapPlayListItemToDto(item, serverId);
+      if (item.poster) {
+        setImageCache(dto.Id, {
+          poster: item.poster,
+          server: session.fnosServer,
+          token: session.fnosToken,
+        });
+      }
+      return dto;
+    });
+    const paged = allDtos.slice(startIndex, startIndex + limit);
+
+    return c.json({
+      Items: paged,
+      TotalRecordCount: allDtos.length,
+      StartIndex: startIndex,
+    });
+  }
+
+  // 无 parentId 且无 Recursive 时返回空列表
   return c.json({ Items: [], TotalRecordCount: 0, StartIndex: startIndex });
 });
 
@@ -158,6 +267,71 @@ items.get('/Filters', requireAuth(), (c) => {
     OfficialRatings: [],
     Years: [],
   });
+});
+
+/**
+ * GET /Items/Latest - 最近添加
+ */
+items.get('/Latest', requireAuth(), async (c) => {
+  const session = c.get('session') as SessionData;
+  const parentId = c.req.query('ParentId') || c.req.query('parentId');
+  const limit = parseInt(c.req.query('Limit') || '16', 10);
+  const includeItemTypes = c.req.query('IncludeItemTypes') || c.req.query('includeItemTypes') || '';
+
+  let fnosGuid = parentId ? toFnosGuid(parentId) : null;
+  // 根据虚拟媒体库类型决定过滤条件
+  let viewFilter: string | null = null;
+  if (fnosGuid === 'view_movies') {
+    viewFilter = 'Movie';
+    fnosGuid = '';
+  } else if (fnosGuid === 'view_tvshows') {
+    viewFilter = 'Series';
+    fnosGuid = '';
+  }
+
+  try {
+    const result = await cachedGetItemList(session.fnosServer, session.fnosToken, {
+      parent_guid: fnosGuid || '',
+      exclude_folder: 1,
+      sort_column: 'air_date',
+      sort_type: 'DESC',
+    });
+
+    if (!result.success || !result.data) {
+      return c.json([]);
+    }
+
+    let list = result.data.list || [];
+
+    // 按虚拟媒体库类型过滤
+    if (viewFilter) {
+      list = list.filter(i => mapFnosTypeToJellyfin(i.type) === viewFilter);
+    }
+
+    // 按 IncludeItemTypes 过滤
+    if (includeItemTypes) {
+      const types = includeItemTypes.split(',').map(t => t.trim());
+      list = list.filter(i => types.includes(mapFnosTypeToJellyfin(i.type)));
+    }
+
+    const dtos = list.slice(0, limit).map(item => {
+      const dto = mapPlayListItemToDto(item, serverId);
+      if (item.poster) {
+        setImageCache(dto.Id, {
+          poster: item.poster,
+          server: session.fnosServer,
+          token: session.fnosToken,
+        });
+      }
+      return dto;
+    });
+
+    // Latest 端点返回数组而非 { Items, TotalRecordCount }
+    return c.json(dtos);
+  } catch (e: any) {
+    console.error('获取最近添加失败:', e.message);
+    return c.json([]);
+  }
 });
 
 /**

@@ -16,6 +16,25 @@ const users = new Hono();
 
 const serverId = generateServerId(config.fnosServer);
 
+/** user/info 缓存，避免重复请求 */
+const userInfoCache = new Map<string, { data: any; ts: number; pending?: Promise<any> }>();
+const USER_INFO_CACHE_TTL = 60_000; // 60 秒
+
+async function cachedGetUserInfo(server: string, token: string) {
+  const key = `${server}:${token}`;
+  const cached = userInfoCache.get(key);
+  if (cached && (Date.now() - cached.ts) < USER_INFO_CACHE_TTL) {
+    return cached.pending || cached.data;
+  }
+
+  const pending = fnosGetUserInfo(server, token).then(result => {
+    userInfoCache.set(key, { data: result, ts: Date.now() });
+    return result;
+  });
+  userInfoCache.set(key, { data: null, ts: Date.now(), pending });
+  return pending;
+}
+
 /**
  * POST /Users/AuthenticateByName
  * Jellyfin 客户端用户名密码登录
@@ -57,7 +76,7 @@ users.post('/AuthenticateByName', async (c) => {
   // 尝试获取用户详细信息
   let userInfo = { username, nickname: username, avatar: '', uid: 0 };
   try {
-    const infoResult = await fnosGetUserInfo(loginResult.server, loginResult.token);
+    const infoResult = await cachedGetUserInfo(loginResult.server, loginResult.token);
     if (infoResult.success && infoResult.data) {
       userInfo = { ...userInfo, ...infoResult.data };
     }
@@ -114,7 +133,7 @@ users.get('/Me', requireAuth(), async (c) => {
 
   let userInfo = { username: session.username, nickname: session.username, avatar: '', uid: 0 };
   try {
-    const infoResult = await fnosGetUserInfo(session.fnosServer, session.fnosToken);
+    const infoResult = await cachedGetUserInfo(session.fnosServer, session.fnosToken);
     if (infoResult.success && infoResult.data) {
       userInfo = { ...userInfo, ...infoResult.data };
     }
@@ -135,7 +154,7 @@ users.get('/:userId', requireAuth(), async (c) => {
 
   let userInfo = { username: session.username, nickname: session.username, avatar: '', uid: 0 };
   try {
-    const infoResult = await fnosGetUserInfo(session.fnosServer, session.fnosToken);
+    const infoResult = await cachedGetUserInfo(session.fnosServer, session.fnosToken);
     if (infoResult.success && infoResult.data) {
       userInfo = { ...userInfo, ...infoResult.data };
     }
