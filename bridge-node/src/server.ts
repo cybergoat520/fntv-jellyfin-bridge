@@ -111,7 +111,8 @@ app.use('*', async (c, next) => {
   for (let i = 0; i < segments.length; i++) {
     const lower = segments[i].toLowerCase();
     // 处理 stream.xxx 扩展名：stream.mkv → stream（去掉扩展名，Hono 不支持 :param 带点号）
-    if (lower.startsWith('stream.') && segments[i - 1] && segments[i - 2]?.toLowerCase() === 'videos') {
+    // 但排除字幕路径中的 Stream.format（如 Stream.subrip）
+    if (lower.startsWith('stream.') && segments[i - 1] && segments[i - 2]?.toLowerCase() === 'videos' && !segments.some(s => s.toLowerCase() === 'subtitles')) {
       segments[i] = 'stream';
       changed = true;
       continue;

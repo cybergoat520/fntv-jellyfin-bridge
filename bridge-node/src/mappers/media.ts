@@ -6,6 +6,19 @@
 import { toJellyfinId } from './id.ts';
 import { secondsToTicks } from './item.ts';
 
+/** 字幕 index → guid 映射缓存（key: `${mediaSourceId}:${index}`） */
+const subtitleIndexMap = new Map<string, string>();
+
+/** 注册字幕 index → guid 映射 */
+export function registerSubtitleIndex(mediaSourceId: string, index: number, guid: string): void {
+  subtitleIndexMap.set(`${mediaSourceId}:${index}`, guid);
+}
+
+/** 获取字幕 guid */
+export function getSubtitleGuid(mediaSourceId: string, index: number): string | null {
+  return subtitleIndexMap.get(`${mediaSourceId}:${index}`) || null;
+}
+
 /** Jellyfin MediaSourceInfo */
 export interface MediaSourceInfo {
   Protocol: string;
@@ -62,6 +75,10 @@ export interface MediaStreamInfo {
   Index: number;
   IsTextSubtitleStream?: boolean;
   SupportsExternalStream?: boolean;
+  DeliveryMethod?: string;
+  DeliveryUrl?: string;
+  SubtitleLocationType?: string;
+  DisplayTitle?: string;
   PixelFormat?: string;
   Level?: number;
   ChannelLayout?: string;
@@ -132,8 +149,9 @@ export function mapAudioStream(as: any, index: number): MediaStreamInfo {
 /** 飞牛字幕流 → Jellyfin MediaStream */
 export function mapSubtitleStream(ss: any, index: number): MediaStreamInfo {
   const isText = !ss.is_bitmap;
+  const codec = ss.codec_name || ss.format || 'srt';
   return {
-    Codec: ss.codec_name || ss.format || 'srt',
+    Codec: codec,
     Language: ss.language || undefined,
     IsInterlaced: false,
     IsDefault: ss.is_default === 1 || ss.is_default === true,
@@ -144,7 +162,7 @@ export function mapSubtitleStream(ss: any, index: number): MediaStreamInfo {
     Title: ss.title || undefined,
     DisplayTitle: ss.title || ss.language || `字幕 ${index}`,
     IsTextSubtitleStream: isText,
-    SupportsExternalStream: ss.is_external === 1,
+    SupportsExternalStream: isText,
   };
 }
 
@@ -188,7 +206,20 @@ function buildSingleMediaSource(
 
   // 字幕流
   for (const ss of subtitleStreams) {
-    mediaStreams.push(mapSubtitleStream(ss, streamIndex++));
+    const subIndex = streamIndex++;
+    const subStream = mapSubtitleStream(ss, subIndex);
+    // 文本字幕加上 DeliveryUrl，客户端直接下载而不需要转码烧录
+    if (subStream.IsTextSubtitleStream) {
+      const codec = (ss.codec_name || ss.format || 'srt').toLowerCase();
+      const format = codec === 'ass' || codec === 'ssa' ? 'ass' : codec === 'webvtt' || codec === 'vtt' ? 'vtt' : 'srt';
+      subStream.DeliveryMethod = 'External';
+      subStream.DeliveryUrl = `/Videos/${mediaGuid}/${mediaGuid}/Subtitles/${subIndex}/Stream.${format}`;
+    }
+    mediaStreams.push(subStream);
+    // 注册 index → guid 映射，供字幕代理使用
+    if (ss.guid) {
+      registerSubtitleIndex(mediaGuid, subIndex, ss.guid);
+    }
   }
 
   // 从文件名推断容器格式

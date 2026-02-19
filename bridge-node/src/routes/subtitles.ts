@@ -6,9 +6,11 @@
 import { Hono } from 'hono';
 import axios from 'axios';
 import { config } from '../config.ts';
-import { requireAuth } from '../middleware/auth.ts';
+import { requireAuth, extractToken } from '../middleware/auth.ts';
+import { optionalAuth } from '../middleware/auth.ts';
 import type { SessionData } from '../services/session.ts';
 import { generateAuthxString } from '../fnos-client/signature.ts';
+import { getSubtitleGuid } from '../mappers/media.ts';
 
 const subtitles = new Hono();
 
@@ -17,26 +19,48 @@ const subtitles = new Hono();
  * GET /Videos/:itemId/:mediaSourceId/Subtitles/:index/:startPositionTicks/Stream.:format
  * 字幕文件代理
  */
-subtitles.get('/:itemId/:mediaSourceId/Subtitles/:index/Stream.:format', requireAuth(), handleSubtitle);
-subtitles.get('/:itemId/:mediaSourceId/Subtitles/:index/:startPos/Stream.:format', requireAuth(), handleSubtitle);
+subtitles.get('/:itemId/:mediaSourceId/Subtitles/:index/*', optionalAuth(), handleSubtitle);
 
 async function handleSubtitle(c: any) {
-  const session = c.get('session') as SessionData;
-  const index = c.req.param('index');
+  const session = c.get('session') as SessionData | undefined;
+  const mediaSourceId = c.req.param('mediaSourceId');
+  const index = parseInt(c.req.param('index'), 10);
+  // 从路径末尾提取格式：Stream.subrip → subrip
+  const pathParts = c.req.path.split('/');
+  const lastPart = pathParts[pathParts.length - 1] || '';
+  const format = lastPart.includes('.') ? lastPart.split('.').pop() || 'srt' : 'srt';
 
-  // index 在这里实际上是字幕流的 guid（我们在 MediaStream 中把 guid 编码到了 index）
-  // 但 Jellyfin 客户端传的是数字 index，我们需要通过 PlaybackInfo 中的映射来找到对应的字幕 guid
-  // 简化处理：直接用 index 作为字幕 guid 尝试下载
-  const subtitleGuid = index;
+  // 通过 index → guid 映射找到飞牛字幕 guid
+  const subtitleGuid = getSubtitleGuid(mediaSourceId, index);
+  if (!subtitleGuid) {
+    console.error(`[SUBTITLE] 未找到字幕映射: mediaSourceId=${mediaSourceId}, index=${index}`);
+    return c.body('Subtitle not found', 404);
+  }
+
+  // 获取认证信息（优先 session，其次 api_key）
+  let server = session?.fnosServer || config.fnosServer;
+  let token = session?.fnosToken || '';
+  if (!token) {
+    const { token: apiKey } = extractToken(c);
+    if (apiKey) {
+      // 从 session store 获取
+      const { getSession } = await import('../services/session.ts');
+      const sess = getSession(apiKey);
+      if (sess) {
+        server = sess.fnosServer;
+        token = sess.fnosToken;
+      }
+    }
+  }
 
   const url = `/v/api/v1/subtitle/dl/${subtitleGuid}`;
-  const fullUrl = `${session.fnosServer}${url}`;
+  const fullUrl = `${server}${url}`;
 
   try {
     const authx = generateAuthxString(url);
     const response = await axios.get(fullUrl, {
       headers: {
-        'Authorization': session.fnosToken,
+        'Authorization': token,
         'Cookie': 'mode=relay',
         'Authx': authx,
       },
@@ -44,9 +68,9 @@ async function handleSubtitle(c: any) {
       timeout: 15000,
     });
 
-    const format = c.req.param('format') || 'srt';
     const contentTypeMap: Record<string, string> = {
       srt: 'text/plain; charset=utf-8',
+      subrip: 'text/plain; charset=utf-8',
       ass: 'text/plain; charset=utf-8',
       ssa: 'text/plain; charset=utf-8',
       vtt: 'text/vtt; charset=utf-8',
