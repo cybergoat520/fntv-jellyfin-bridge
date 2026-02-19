@@ -10,7 +10,7 @@ import { generateServerId, toFnosGuid, registerMediaGuid } from '../mappers/id.t
 import { buildMediaSources, type PlaybackInfoResponse } from '../mappers/media.ts';
 import { requireAuth, extractToken } from '../middleware/auth.ts';
 import { fnosGetPlayInfo, fnosGetStreamList } from '../services/fnos.ts';
-import { registerStreamMeta } from '../services/hls-session.ts';
+import { registerStreamMeta, clearHlsSession } from '../services/hls-session.ts';
 import type { SessionData } from '../services/session.ts';
 
 const mediainfo = new Hono();
@@ -35,12 +35,14 @@ async function handlePlaybackInfo(c: any) {
   let enableDirectPlay: boolean | undefined;
   let enableDirectStream: boolean | undefined;
   let mediaSourceId: string | undefined;
+  let maxStreamingBitrate: number | undefined;
   try {
     if (c.req.method === 'POST') {
       const body = await c.req.json();
       enableDirectPlay = body.EnableDirectPlay;
       enableDirectStream = body.EnableDirectStream;
       mediaSourceId = body.MediaSourceId;
+      if (body.MaxStreamingBitrate != null) maxStreamingBitrate = Number(body.MaxStreamingBitrate);
     }
   } catch { /* ignore parse errors */ }
   // query params 也可能带这些参数
@@ -55,6 +57,10 @@ async function handlePlaybackInfo(c: any) {
   if (!mediaSourceId) {
     const qMS = c.req.query('MediaSourceId');
     if (qMS) mediaSourceId = qMS;
+  }
+  if (maxStreamingBitrate === undefined) {
+    const qMB = c.req.query('MaxStreamingBitrate');
+    if (qMB) maxStreamingBitrate = Number(qMB);
   }
 
   try {
@@ -122,11 +128,21 @@ async function handlePlaybackInfo(c: any) {
       }
       if (enableDirectStream === false) {
         ms.SupportsDirectStream = false;
+        // 回退到转码时，必须设置 TranscodingSubProtocol 让 jellyfin-web 用 hls.js
+        ms.TranscodingSubProtocol = 'hls';
       }
       // 在 TranscodingUrl 中注入 api_key，让 hls.js 能通过认证
       if (ms.TranscodingUrl && userToken) {
         const sep = ms.TranscodingUrl.includes('?') ? '&' : '?';
         ms.TranscodingUrl = `${ms.TranscodingUrl}${sep}api_key=${userToken}`;
+        // 附加 MaxStreamingBitrate 作为 cache buster，让质量切换产生不同 URL
+        if (maxStreamingBitrate) {
+          ms.TranscodingUrl = `${ms.TranscodingUrl}&MaxStreamingBitrate=${maxStreamingBitrate}`;
+        }
+      }
+      // 质量切换时清除 HLS 会话缓存，让下次请求重新启动转码
+      if (enableDirectStream === false || enableDirectPlay === false) {
+        clearHlsSession(ms.Id);
       }
       // 注册 media_guid → item_guid 映射
       registerMediaGuid(ms.Id, fnosGuid);
@@ -139,7 +155,12 @@ async function handlePlaybackInfo(c: any) {
       PlaySessionId: playSessionId,
     };
 
-    console.log(`[PLAYBACK] PlaybackInfo: item=${itemId}, sources=${filteredSources.length}/${mediaSources.length}, mediaSourceId=${mediaSourceId || 'none'}, enableDS=${enableDirectStream}, enableDP=${enableDirectPlay}`);
+    console.log(`[PLAYBACK] PlaybackInfo: item=${itemId}, sources=${filteredSources.length}/${mediaSources.length}, mediaSourceId=${mediaSourceId || 'none'}, enableDS=${enableDirectStream}, enableDP=${enableDirectPlay}, maxBitrate=${maxStreamingBitrate || 'none'}`);
+    for (const ms of filteredSources) {
+      const videoStream = ms.MediaStreams?.find((s: any) => s.Type === 'Video');
+      const audioStream = ms.MediaStreams?.find((s: any) => s.Type === 'Audio' && s.Index === ms.DefaultAudioStreamIndex);
+      console.log(`  [SOURCE] id=${ms.Id}, name=${ms.Name}, container=${ms.Container}, DS=${ms.SupportsDirectStream}, TC=${ms.SupportsTranscoding}, video=${videoStream?.Codec || '?'}, audio=${audioStream?.Codec || '?'}`);
+    }
 
     return c.json(response);
   } catch (e: any) {

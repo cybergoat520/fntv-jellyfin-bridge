@@ -10,7 +10,7 @@ import { serve } from '@hono/node-server';
 import { WebSocketServer, WebSocket } from 'ws';
 import app from './server.ts';
 import { config } from './config.ts';
-import { isVideoStreamPath, isHlsPath, handleVideoStream, handleHlsStream } from './proxy/stream.ts';
+import { isHlsPath, handleHlsStream } from './proxy/stream.ts';
 
 console.log(`
 ╔══════════════════════════════════════╗
@@ -47,19 +47,10 @@ nativeServer.timeout = 0; // 不限制 socket 超时
 const listeners = nativeServer.listeners('request');
 nativeServer.removeAllListeners('request');
 
-// 添加拦截器：视频流和 HLS 走原生代理，其他走 Hono
+// 添加拦截器：HLS 走原生代理，视频流和其他请求走 Hono
 nativeServer.on('request', (req: any, res: any) => {
   const url = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
   const pathname = url.pathname;
-
-  // 视频流请求 → 原生流式代理
-  if (isVideoStreamPath(pathname)) {
-    handleVideoStream(req, res).catch((e: any) => {
-      console.error('[VIDEO] 未捕获异常:', e.message);
-      if (!res.headersSent) { res.writeHead(500); res.end('Internal error'); }
-    });
-    return;
-  }
 
   // HLS 请求 → 原生流式代理
   if (isHlsPath(pathname)) {

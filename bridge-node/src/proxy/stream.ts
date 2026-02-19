@@ -85,6 +85,7 @@ function pipeProxy(
   clientReq: http.IncomingMessage,
   clientRes: http.ServerResponse,
   label: string,
+  force200: boolean = false,
 ) {
   const upstream = new URL(targetUrl);
   const isHttps = upstream.protocol === 'https:';
@@ -113,7 +114,37 @@ function pipeProxy(
       }
     }
 
-    clientRes.writeHead(proxyRes.statusCode || 200, resHeaders);
+    // 飞牛返回 application/octet-stream，浏览器 <video> 标签需要正确的 MIME 类型
+    if (label === 'VIDEO' && (!resHeaders['content-type'] || resHeaders['content-type'] === 'application/octet-stream')) {
+      // 从请求 URL 的扩展名推断 MIME 类型
+      const ext = (clientReq.url || '').match(/\.(\w+)(\?|$)/)?.[1]?.toLowerCase();
+      const mimeMap: Record<string, string> = {
+        mp4: 'video/mp4', mkv: 'video/x-matroska', webm: 'video/webm',
+        avi: 'video/x-msvideo', mov: 'video/quicktime', ts: 'video/mp2t',
+      };
+      resHeaders['content-type'] = mimeMap[ext || ''] || 'video/mp4';
+    }
+
+    // 当我们自动添加了 Range 头（客户端没发 Range），上游返回 206
+    // 浏览器 <video> 标签期望收到 200，否则无法播放
+    let statusCode = proxyRes.statusCode || 200;
+    if (force200 && statusCode === 206) {
+      statusCode = 200;
+      delete resHeaders['content-range'];
+      // content-length 应该是完整文件大小，从 content-range 解析
+      const cr = proxyRes.headers['content-range'];
+      if (cr) {
+        const totalMatch = cr.match(/\/(\d+)$/);
+        if (totalMatch) {
+          resHeaders['content-length'] = totalMatch[1];
+        }
+      }
+      console.log(`[${label}] 206→200 转换 (客户端未发 Range)`);
+    }
+
+    console.log(`[${label}] 上游响应: ${statusCode}, content-type=${resHeaders['content-type']}, content-length=${resHeaders['content-length'] || 'none'}, content-range=${resHeaders['content-range'] || 'none'}, accept-ranges=${resHeaders['accept-ranges'] || 'none'}`);
+
+    clientRes.writeHead(statusCode, resHeaders);
     // 直接 pipe — 无 body 超时，真正的流式传输
     proxyRes.pipe(clientRes);
 
@@ -258,7 +289,12 @@ export async function handleVideoStream(
     }
 
     const headers = buildUpstreamHeaders(req, extra);
-    pipeProxy(targetUrl, headers, skipVerify, req, res, 'VIDEO');
+    const clientHadRange = !!headers['range'];
+    // 飞牛 media/range API 要求必须有 Range 头，否则返回 416
+    if (!clientHadRange) {
+      headers['range'] = 'bytes=0-';
+    }
+    pipeProxy(targetUrl, headers, skipVerify, req, res, 'VIDEO', !clientHadRange);
 
   } catch (e: any) {
     console.error('[VIDEO] 视频代理失败:', e.message);

@@ -214,7 +214,7 @@ function buildSingleMediaSource(
   // 始终提供 TranscodingUrl 作为后备（视频编解码器可能浏览器不支持，如 HEVC HDR10）
   const transcodingUrl = `/Videos/${mediaGuid}/hls/main.m3u8`;
 
-  return {
+  const source: MediaSourceInfo = {
     Protocol: 'Http',
     Id: mediaGuid,
     Path: videoStreamUrl,
@@ -239,9 +239,16 @@ function buildSingleMediaSource(
     Bitrate: vs0?.bps || undefined,
     RequiredHttpHeaders: [],
     TranscodingUrl: transcodingUrl,
-    TranscodingSubProtocol: 'hls',
     TranscodingContainer: 'ts',
   };
+
+  // 只在必须转码时设置 TranscodingSubProtocol
+  // 否则 jellyfin-web 的 isHls() 会让 hls.js 去加载原始视频文件，导致 DirectStream 失败
+  if (needsTranscoding) {
+    source.TranscodingSubProtocol = 'hls';
+  }
+
+  return source;
 }
 
 /**

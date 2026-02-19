@@ -105,18 +105,24 @@ async function handleVideoStream(c: any) {
     const rangeHeader = c.req.header('Range') || 'bytes=0-';
     extraHeaders['Range'] = rangeHeader;
 
-    // 发起代理请求
+    console.log(`[VIDEO] 代理请求: ${targetUrl}, range=${extraHeaders['Range']}`);
+
+    // 发起代理请求（timeout 只限制响应头等待时间，不限制数据传输）
+    // validateStatus: 接受 2xx 和 206 (Partial Content)
     const proxyResponse = await axios({
       method: 'get',
       url: targetUrl,
       headers: extraHeaders,
       responseType: 'stream',
-      timeout: 30000,
+      timeout: 120000,
       maxRedirects: 5,
+      validateStatus: (status: number) => status >= 200 && status < 400,
       httpsAgent: new https.Agent({
         rejectUnauthorized: !skipVerify,
       }),
     });
+
+    console.log(`[VIDEO] 上游响应: ${proxyResponse.status}, content-type=${proxyResponse.headers['content-type']}, content-length=${proxyResponse.headers['content-length'] || 'none'}`);
 
     // 转发响应头
     const responseHeaders: Record<string, string> = {};
@@ -145,8 +151,10 @@ async function handleVideoStream(c: any) {
 }
 
 videos.get('/:itemId/stream', requireAuth(), handleVideoStream);
+videos.get('/:itemId/stream.:container', requireAuth(), handleVideoStream);
 
 // HEAD 请求也需要支持（某些客户端先 HEAD 探测）
 videos.on('HEAD', '/:itemId/stream', requireAuth(), handleVideoStream);
+videos.on('HEAD', '/:itemId/stream.:container', requireAuth(), handleVideoStream);
 
 export default videos;
