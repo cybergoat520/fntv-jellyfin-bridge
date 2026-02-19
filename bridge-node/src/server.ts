@@ -172,6 +172,32 @@ app.get('/QuickConnect/Enabled', (c) => c.json(false));
 app.post('/Sessions/Capabilities', (c) => c.body(null, 204));
 app.post('/Sessions/Capabilities/Full', (c) => c.body(null, 204));
 
+// GET /Sessions - 会话列表（字幕切换时 jellyfin-web 需要查询 TranscodingInfo）
+app.get('/Sessions', (c) => {
+  // 返回虚拟会话，让客户端知道当前在转码状态
+  return c.json([{
+    Id: 'dummy-session',
+    UserId: '',
+    UserName: '',
+    Client: '',
+    DeviceId: '',
+    DeviceName: '',
+    ApplicationVersion: '',
+    IsActive: true,
+    SupportsRemoteControl: false,
+    PlayState: {
+      CanSeek: true,
+      IsPaused: false,
+      IsMuted: false,
+    },
+    // 关键：告诉客户端视频是直接流转码（字幕通过外部加载）
+    TranscodingInfo: {
+      IsVideoDirect: true,
+      IsAudioDirect: false,
+    },
+  }]);
+});
+
 // Localization 端点
 app.get('/Localization/Countries', (c) => c.json([]));
 app.get('/Localization/Cultures', (c) => c.json([]));
@@ -259,7 +285,9 @@ app.get('/Users/:userId/Items/:itemId', (c) => {
   return c.redirect(`/Items/${itemId}${url.search}`, 307);
 });
 
-// 根路径重定向到 /web/（Xbox 客户端 HEAD 探测后剥离 /web/ 后缀得到 API base path）
+// 根路径处理：Xbox 客户端用 HEAD 探测，返回 200 不重定向
+// GET 请求继续重定向到 Web UI
+app.on('HEAD', '/', (c) => c.body(null, 200));
 app.get('/', (c) => c.redirect('/web/', 302));
 app.get('/web', (c) => c.redirect('/web/', 302));
 

@@ -219,6 +219,9 @@ function buildSingleMediaSource(
     // 注册 index → guid 映射，供字幕代理使用
     if (ss.guid) {
       registerSubtitleIndex(mediaGuid, subIndex, ss.guid);
+      console.log(`[SUBTITLE] 注册映射: mediaGuid=${mediaGuid}, index=${subIndex}, guid=${ss.guid}`);
+    } else {
+      console.log(`[SUBTITLE] 跳过注册（无guid）: mediaGuid=${mediaGuid}, index=${subIndex}, title=${ss.title}`);
     }
   }
 
