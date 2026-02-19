@@ -1,12 +1,14 @@
 /**
  * HLS 转码会话管理
- * 
+ *
  * 飞牛 HLS 转码流程：
  * 1. play/play 启动转码会话 → 返回 play_link 含 sessionGuid
  * 2. /v/media/{sessionGuid}/preset.m3u8 获取播放列表
  * 3. /v/media/{sessionGuid}/xxx.ts 获取视频段
- * 
+ *
  * 本模块管理 mediaGuid → sessionGuid 的映射
+ * jellyfin-web 的 Playing/Progress 心跳（每 10s）会通过 playback.ts 转发到飞牛，
+ * 同时携带正确的 play_link，起到会话保活 + 进度同步的双重作用
  */
 
 import { fnosStartPlay } from './fnos.ts';
@@ -14,6 +16,7 @@ import { fnosStartPlay } from './fnos.ts';
 /** 流元数据，用于调用 play/play */
 export interface StreamMeta {
   media_guid: string;
+  item_guid: string;
   video_guid: string;
   video_encoder: string;
   resolution: string;
@@ -22,6 +25,7 @@ export interface StreamMeta {
   audio_guid: string;
   subtitle_guid: string;
   channels: number;
+  duration: number;
 }
 
 /** HLS 会话信息 */
@@ -49,6 +53,21 @@ const hlsSessionMap = new Map<string, HlsSession>();
  */
 export function registerStreamMeta(mediaGuid: string, meta: StreamMeta): void {
   streamMetaMap.set(mediaGuid, meta);
+}
+
+/**
+ * 获取流元数据（用于 playback 进度报告获取 play_link）
+ */
+export function getStreamMeta(mediaGuid: string): StreamMeta | undefined {
+  return streamMetaMap.get(mediaGuid);
+}
+
+/**
+ * 获取 HLS 会话的 play_link（用于 playback 进度报告）
+ */
+export function getHlsPlayLink(mediaGuid: string): string {
+  const cached = hlsSessionMap.get(mediaGuid);
+  return cached?.playLink || '';
 }
 
 /**

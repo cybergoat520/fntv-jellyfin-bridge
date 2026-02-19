@@ -19,7 +19,7 @@ import type { SessionData } from '../services/session.ts';
 import { toFnosGuid } from '../mappers/id.ts';
 import { fnosGetPlayInfo, fnosGetStream } from '../services/fnos.ts';
 import { generateAuthxString } from '../fnos-client/signature.ts';
-import { getOrCreateHlsSession, getCachedHlsSession } from '../services/hls-session.ts';
+import { getOrCreateHlsSession, getCachedHlsSession, clearHlsSession } from '../services/hls-session.ts';
 
 /** 从客户端透传到上游的请求头（同 Go 代理 PassthroughHeaders） */
 const PASSTHROUGH_HEADERS = [
@@ -86,6 +86,7 @@ function pipeProxy(
   clientRes: http.ServerResponse,
   label: string,
   force200: boolean = false,
+  on410Retry?: () => void,
 ) {
   const upstream = new URL(targetUrl);
   const isHttps = upstream.protocol === 'https:';
@@ -143,6 +144,14 @@ function pipeProxy(
     }
 
     console.log(`[${label}] 上游响应: ${statusCode}, content-type=${resHeaders['content-type']}, content-length=${resHeaders['content-length'] || 'none'}, content-range=${resHeaders['content-range'] || 'none'}, accept-ranges=${resHeaders['accept-ranges'] || 'none'}`);
+
+    // 410 Gone → 转码会话过期，触发重试
+    if (statusCode === 410 && on410Retry) {
+      console.log(`[${label}] 410 Gone → 触发会话重建重试`);
+      proxyRes.resume(); // 消费掉响应体
+      on410Retry();
+      return;
+    }
 
     clientRes.writeHead(statusCode, resHeaders);
     // 直接 pipe — 无 body 超时，真正的流式传输
@@ -382,5 +391,45 @@ export async function handleHlsStream(
   // 设置 no-cache 头，防止浏览器缓存 HLS 响应（避免缓存 410 等错误）
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
 
-  pipeProxy(targetUrl, headers, config.ignoreCert, req, res, 'HLS');
+  // 410 重试：清除旧会话 → 重建 → 用新 sessionGuid 重新代理
+  const on410Retry = session ? async () => {
+    console.log(`[HLS] 410 重试: 清除旧会话 mediaGuid=${mediaGuid}`);
+    clearHlsSession(mediaGuid);
+
+    try {
+      const newSession = await getOrCreateHlsSession(fnosServer, fnosToken, mediaGuid);
+      if (!newSession) {
+        console.error(`[HLS] 410 重试失败: 无法重建会话`);
+        if (!res.headersSent) {
+          res.writeHead(502);
+          res.end('Failed to rebuild HLS session');
+        }
+        return;
+      }
+
+      const newFile = file === 'main.m3u8' ? 'preset.m3u8' : file;
+      const newPath = `/v/media/${newSession.sessionGuid}/${newFile}`;
+      const newUrl = `${fnosServer}${newPath}`;
+
+      console.log(`[HLS] 410 重试: 新会话 sessionGuid=${newSession.sessionGuid}`);
+
+      const retryExtra: Record<string, string> = {
+        'Authorization': fnosToken,
+        'Cookie': 'mode=relay',
+        'Authx': generateAuthxString(newPath),
+      };
+      const retryHeaders = buildUpstreamHeaders(req, retryExtra);
+
+      // 重试不再带 on410Retry，避免无限循环
+      pipeProxy(newUrl, retryHeaders, config.ignoreCert, req, res, 'HLS-RETRY');
+    } catch (e: any) {
+      console.error(`[HLS] 410 重试异常:`, e.message);
+      if (!res.headersSent) {
+        res.writeHead(502);
+        res.end('HLS retry failed');
+      }
+    }
+  } : undefined;
+
+  pipeProxy(targetUrl, headers, config.ignoreCert, req, res, 'HLS', false, on410Retry);
 }

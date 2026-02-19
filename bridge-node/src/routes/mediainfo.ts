@@ -100,6 +100,7 @@ async function handlePlaybackInfo(c: any) {
       if (vs && as) {
         registerStreamMeta(ms.Id, {
           media_guid: ms.Id,
+          item_guid: fnosGuid,
           video_guid: vs.guid || '',
           video_encoder: vs.codec_name || 'h264',
           resolution: vs.resolution_type || (vs.height >= 2160 ? '4k' : vs.height >= 1080 ? '1080p' : '720p'),
@@ -108,6 +109,7 @@ async function handlePlaybackInfo(c: any) {
           audio_guid: as.guid || '',
           subtitle_guid: '',
           channels: as.channels || 2,
+          duration: playInfo.item.duration || 0,
         });
       }
     }

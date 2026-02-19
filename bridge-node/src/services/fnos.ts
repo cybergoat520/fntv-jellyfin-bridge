@@ -163,6 +163,8 @@ export async function fnosRecordPlayStatus(server: string, token: string, data: 
   play_link: string;
   ts: number;
   duration: number;
+  resolution?: string;
+  bitrate?: number;
 }) {
   const client = createFnosClient(server, token);
   return client.request('post' as HttpMethod, '/v/api/v1/play/record', data);
