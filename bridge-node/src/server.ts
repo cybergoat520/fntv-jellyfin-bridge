@@ -105,8 +105,13 @@ app.use('*', async (c, next) => {
   // 跳过静态文件
   if (originalPath.startsWith('/web/')) return next();
 
-  const segments = originalPath.split('/');
-  let changed = false;
+  // 规范化双斜杠（Xbox 客户端可能产生 //System/Info/Public）
+  let normalizedPath = originalPath.replace(/\/\//g, '/');
+  if (normalizedPath !== originalPath) {
+    console.log(`[PATH] 双斜杠规范化: ${originalPath} → ${normalizedPath}`);
+  }
+  const segments = normalizedPath.split('/');
+  let changed = normalizedPath !== originalPath;
 
   for (let i = 0; i < segments.length; i++) {
     const lower = segments[i].toLowerCase();
@@ -258,10 +263,9 @@ app.get('/Users/:userId/Items/:itemId', (c) => {
   return c.redirect(`/Items/${itemId}${url.search}`, 307);
 });
 
-// 根路径重定向到 web UI
-app.get('/', (c) => c.redirect('/web/index.html', 302));
-app.get('/web', (c) => c.redirect('/web/index.html', 302));
-app.get('/web/', (c) => c.redirect('/web/index.html', 302));
+// 根路径重定向到 /web/（Xbox 客户端 HEAD 探测后剥离 /web/ 后缀得到 API base path）
+app.get('/', (c) => c.redirect('/web/', 302));
+app.get('/web', (c) => c.redirect('/web/', 302));
 
 // Jellyfin Web UI 静态文件托管
 const webDir = path.resolve(import.meta.dirname || '.', '..', 'web');
@@ -269,6 +273,11 @@ const hasWebUI = fs.existsSync(path.join(webDir, 'index.html'));
 
 if (hasWebUI) {
   console.log(`[WEB] Jellyfin Web UI: ${webDir}`);
+  // /web/ 直接返回 index.html（不重定向，Xbox HEAD 探测需要 200）
+  app.get('/web/', (c) => {
+    const html = fs.readFileSync(path.join(webDir, 'index.html'), 'utf-8');
+    return c.html(html);
+  });
   // /web/foo.js → 从 bridge-node/web/foo.js 提供
   app.get('/web/*', serveStatic({
     root: './',
