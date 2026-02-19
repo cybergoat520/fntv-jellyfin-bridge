@@ -89,7 +89,7 @@ export class FnosClient {
     data: any,
     retriesLeft: number,
   ): Promise<RequestResult<T>> {
-    if ((method === 'post' || method === 'put') && data) {
+    if ((method === 'post' || method === 'put' || method === 'delete') && data) {
       data = { ...data, nonce: generateNonce() };
     }
 
@@ -123,7 +123,8 @@ export class FnosClient {
             response = await this.http.put(fullUrl, data, config);
             break;
           case 'delete':
-            response = await this.http.delete(fullUrl, config);
+            // DELETE 请求需要传递 body 时使用 config.data
+            response = await this.http.delete(fullUrl, { ...config, data });
             break;
           default:
             return { success: false, message: `不支持的方法: ${method}` };

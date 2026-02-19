@@ -15,7 +15,7 @@ import { isHlsPath, handleHlsStream } from './proxy/stream.ts';
 console.log(`
 ╔══════════════════════════════════════╗
 ║         fnos-bridge v0.1.0           ║
-║   飞牛影视 → Jellyfin 转换层          ║
+║      飞牛影视 → Jellyfin 转换层      ║
 ╚══════════════════════════════════════╝
 `);
 console.log(`飞牛服务器: ${config.fnosServer}`);

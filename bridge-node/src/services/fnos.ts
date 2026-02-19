@@ -142,11 +142,27 @@ export async function fnosStartPlay(server: string, token: string, data: {
 }
 
 /**
- * 标记已观看
+ * 标记已观看 / 取消观看
+ * POST /v/api/v1/item/watched - 标记已观看
+ * DELETE /v/api/v1/item/watched - 取消观看（推测）
  */
-export async function fnosSetWatched(server: string, token: string, itemGuid: string) {
+export async function fnosSetWatched(server: string, token: string, itemGuid: string, watched: boolean = true) {
   const client = createFnosClient(server, token);
-  return client.request('post' as HttpMethod, '/v/api/v1/item/watched', {
+  const method = watched ? 'post' : 'delete';
+  return client.request(method as HttpMethod, '/v/api/v1/item/watched', {
+    item_guid: itemGuid,
+  });
+}
+
+/**
+ * 收藏/取消收藏
+ * PUT /v/api/v1/item/favorite - 收藏
+ * DELETE /v/api/v1/item/favorite - 取消收藏
+ */
+export async function fnosSetFavorite(server: string, token: string, itemGuid: string, isFavorite: boolean) {
+  const client = createFnosClient(server, token);
+  const method = isFavorite ? 'put' : 'delete';
+  return client.request(method as HttpMethod, '/v/api/v1/item/favorite', {
     item_guid: itemGuid,
   });
 }

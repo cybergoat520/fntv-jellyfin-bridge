@@ -38,9 +38,20 @@ playstate.post('/UserPlayedItems/:itemId', requireAuth(), async (c) => {
 
 /**
  * DELETE /UserPlayedItems/:itemId - 标记未观看
- * 飞牛没有对应 API，返回成功但不操作
  */
-playstate.delete('/UserPlayedItems/:itemId', requireAuth(), (c) => {
+playstate.delete('/UserPlayedItems/:itemId', requireAuth(), async (c) => {
+  const session = c.get('session') as SessionData;
+  const itemId = c.req.param('itemId');
+  const fnosGuid = toFnosGuid(itemId);
+
+  if (fnosGuid) {
+    try {
+      await fnosSetWatched(session.fnosServer, session.fnosToken, fnosGuid, false);
+    } catch (e: any) {
+      console.error('标记未观看失败:', e.message);
+    }
+  }
+
   return c.json({
     PlaybackPositionTicks: 0,
     PlayCount: 0,
@@ -60,7 +71,7 @@ playstate.post('/Users/:userId/PlayedItems/:itemId', requireAuth(), async (c) =>
 
   if (fnosGuid) {
     try {
-      await fnosSetWatched(session.fnosServer, session.fnosToken, fnosGuid);
+      await fnosSetWatched(session.fnosServer, session.fnosToken, fnosGuid, true);
     } catch (e: any) {
       console.error('标记已观看失败:', e.message);
     }
@@ -77,7 +88,19 @@ playstate.post('/Users/:userId/PlayedItems/:itemId', requireAuth(), async (c) =>
 /**
  * DELETE /Users/:userId/PlayedItems/:itemId
  */
-playstate.delete('/Users/:userId/PlayedItems/:itemId', requireAuth(), (c) => {
+playstate.delete('/Users/:userId/PlayedItems/:itemId', requireAuth(), async (c) => {
+  const session = c.get('session') as SessionData;
+  const itemId = c.req.param('itemId');
+  const fnosGuid = toFnosGuid(itemId);
+
+  if (fnosGuid) {
+    try {
+      await fnosSetWatched(session.fnosServer, session.fnosToken, fnosGuid, false);
+    } catch (e: any) {
+      console.error('标记未观看失败:', e.message);
+    }
+  }
+
   return c.json({
     PlaybackPositionTicks: 0,
     PlayCount: 0,
