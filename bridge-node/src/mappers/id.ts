@@ -15,6 +15,23 @@ const reverseMap = new Map<string, string>();
 /** media_guid → item_guid 映射（用于 getItem 查找） */
 const mediaToItemMap = new Map<string, string>();
 
+/** fnosGuid → 原始类型缓存（item/list 返回的类型） */
+const typeCache = new Map<string, string>();
+
+/**
+ * 注册飞牛项目的原始类型
+ */
+export function registerItemType(fnosGuid: string, type: string): void {
+  typeCache.set(fnosGuid, type);
+}
+
+/**
+ * 获取飞牛项目的原始类型
+ */
+export function getItemType(fnosGuid: string): string | null {
+  return typeCache.get(fnosGuid) || null;
+}
+
 /**
  * 将飞牛 GUID 转换为 Jellyfin UUID (v5)
  * 确定性：相同输入始终产生相同输出

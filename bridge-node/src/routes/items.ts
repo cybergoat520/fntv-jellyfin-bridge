@@ -5,7 +5,7 @@
 
 import { Hono } from 'hono';
 import { config } from '../config.ts';
-import { generateServerId, toFnosGuid, toJellyfinId, registerMediaGuid } from '../mappers/id.ts';
+import { generateServerId, toFnosGuid, toJellyfinId, registerMediaGuid, getItemType } from '../mappers/id.ts';
 import { mapPlayListItemToDto, mapPlayInfoToDto, makeCollectionFolder } from '../mappers/item.ts';
 import { buildMediaSources } from '../mappers/media.ts';
 import { requireAuth } from '../middleware/auth.ts';
@@ -359,13 +359,48 @@ items.get('/:itemId', requireAuth(), async (c) => {
   }
 
   try {
+    // 检查原始类型：如果是 TV/Series，play/info 会返回最近观看的那一集
+    // 需要构造 Series DTO 而不是 Episode DTO
+    const originalType = getItemType(fnosGuid);
+
     const result = await fnosGetPlayInfo(session.fnosServer, session.fnosToken, fnosGuid);
     if (!result.success || !result.data) {
       return c.json({ error: 'Item not found' }, 404);
     }
 
     const playInfo = result.data;
-    console.log(`[ITEM] 详情: guid=${fnosGuid}, type=${playInfo.item.type}, media_guid=${playInfo.media_guid}, can_play=${playInfo.item.can_play}`);
+    console.log(`[ITEM] 详情: guid=${fnosGuid}, type=${playInfo.item.type}, originalType=${originalType}, media_guid=${playInfo.media_guid}, can_play=${playInfo.item.can_play}, grand_guid=${playInfo.grand_guid}, parent_guid=${playInfo.parent_guid}, item.guid=${playInfo.item.guid}, item.parent_guid=${playInfo.item.parent_guid}`);
+
+    // 如果原始类型是 TV/Series，覆盖 play/info 返回的 Episode 类型
+    if (originalType === 'TV' || originalType === 'Series') {
+      playInfo.item.type = 'TV';
+      // play/info 返回的是最近观看的集，用 tv_title 作为系列名
+      if (playInfo.item.tv_title) {
+        playInfo.item.title = playInfo.item.tv_title;
+      }
+      // 用原始系列 guid，而不是 play/info 返回的集 guid
+      playInfo.item.guid = fnosGuid;
+      // grand_guid 设为空（自身就是系列）
+      playInfo.grand_guid = '';
+      playInfo.parent_guid = '';
+      // 用系列的季数信息
+      playInfo.item.number_of_seasons = playInfo.item.number_of_seasons || 0;
+      playInfo.item.local_number_of_seasons = playInfo.item.local_number_of_seasons || 0;
+    }
+
+    // 如果原始类型是 Season，也覆盖为 Season
+    if (originalType === 'Season') {
+      playInfo.item.type = 'Season';
+      // 季的标题用 parent_title（第 X 季）
+      if (playInfo.item.parent_title) {
+        playInfo.item.title = playInfo.item.parent_title;
+      }
+      // 用原始季的 guid
+      playInfo.item.guid = fnosGuid;
+      // 季的季数
+      playInfo.item.season_number = playInfo.item.season_number || 1;
+    }
+
     const dto = mapPlayInfoToDto(playInfo, serverId);
     console.log(`[ITEM] DTO: Type=${dto.Type}, MediaType=${dto.MediaType}, Name=${dto.Name}`);
 

@@ -3,7 +3,7 @@
  * 飞牛 PlayListItem / ItemDetail → Jellyfin BaseItemDto
  */
 
-import { toJellyfinId } from './id.ts';
+import { toJellyfinId, registerItemType } from './id.ts';
 import type { FnosPlayListItem, FnosItemDetail, FnosPlayInfo } from '../types/fnos.ts';
 
 /** Jellyfin BaseItemDto (简化版，按需扩展) */
@@ -118,6 +118,9 @@ export function mapPlayListItemToDto(
   const isFolder = ['Series', 'Season', 'Folder'].includes(jellyfinType);
   const duration = item.duration || (item.runtime ? item.runtime * 60 : 0);
 
+  // 记住原始类型，供详情路由判断
+  registerItemType(item.guid, item.type);
+
   const dto: BaseItemDto = {
     Name: item.title || item.tv_title,
     ServerId: serverId,
@@ -149,6 +152,7 @@ export function mapPlayListItemToDto(
     dto.IndexNumber = item.episode_number;
     dto.ParentIndexNumber = item.season_number;
     dto.SeriesName = item.tv_title;
+    dto.SeasonName = item.parent_title || (item.season_number != null ? `第 ${item.season_number} 季` : undefined);
     if (item.ancestor_guid) {
       dto.SeriesId = toJellyfinId(item.ancestor_guid);
     }
@@ -215,6 +219,7 @@ export function mapPlayInfoToDto(
     dto.IndexNumber = item.episode_number;
     dto.ParentIndexNumber = item.season_number;
     dto.SeriesName = item.tv_title;
+    dto.SeasonName = item.parent_title || (item.season_number != null ? `第 ${item.season_number} 季` : undefined);
     if (info.grand_guid) {
       dto.SeriesId = toJellyfinId(info.grand_guid);
     }
@@ -222,6 +227,10 @@ export function mapPlayInfoToDto(
       dto.SeasonId = toJellyfinId(info.parent_guid);
       dto.ParentId = toJellyfinId(info.parent_guid);
     }
+  }
+
+  if (jellyfinType === 'Series') {
+    dto.ChildCount = item.local_number_of_seasons || item.number_of_seasons;
   }
 
   if (item.air_date) {

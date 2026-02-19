@@ -75,11 +75,19 @@ export async function fnosGetItemList(server: string, token: string, req: FnosIt
 }
 
 /**
+ * 获取季列表
+ */
+export async function fnosGetSeasonList(server: string, token: string, seriesGuid: string) {
+  const client = createFnosClient(server, token);
+  return client.request<FnosPlayListItem[]>('get' as HttpMethod, `/v/api/v1/season/list/${seriesGuid}`);
+}
+
+/**
  * 获取剧集列表
  */
-export async function fnosGetEpisodeList(server: string, token: string, id: string) {
+export async function fnosGetEpisodeList(server: string, token: string, seasonGuid: string) {
   const client = createFnosClient(server, token);
-  return client.request<FnosPlayListItem[]>('get' as HttpMethod, `/v/api/v1/episode/list/${id}`);
+  return client.request<FnosPlayListItem[]>('get' as HttpMethod, `/v/api/v1/episode/list/${seasonGuid}`);
 }
 
 /**
