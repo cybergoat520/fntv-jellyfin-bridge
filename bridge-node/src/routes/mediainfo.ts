@@ -131,6 +131,13 @@ async function handlePlaybackInfo(c: any) {
         // 回退到转码时，必须设置 TranscodingSubProtocol 让 jellyfin-web 用 hls.js
         ms.TranscodingSubProtocol = 'hls';
       }
+      // 质量菜单选择低码率时，禁用 DirectStream 强制走 HLS 转码
+      // 否则播放器会忽略码率限制继续播放原始文件
+      if (maxStreamingBitrate && ms.Bitrate && maxStreamingBitrate < ms.Bitrate && ms.SupportsDirectStream) {
+        ms.SupportsDirectStream = false;
+        ms.TranscodingSubProtocol = 'hls';
+        console.log(`  [QUALITY] 码率限制 ${(maxStreamingBitrate / 1e6).toFixed(1)}Mbps < 源码率 ${(ms.Bitrate / 1e6).toFixed(1)}Mbps → 强制 HLS 转码`);
+      }
       // 在 TranscodingUrl 中注入 api_key，让 hls.js 能通过认证
       if (ms.TranscodingUrl && userToken) {
         const sep = ms.TranscodingUrl.includes('?') ? '&' : '?';
