@@ -36,6 +36,8 @@ async function handlePlaybackInfo(c: any) {
   let enableDirectStream: boolean | undefined;
   let mediaSourceId: string | undefined;
   let maxStreamingBitrate: number | undefined;
+  let audioStreamIndex: number | undefined;
+  let subtitleStreamIndex: number | undefined;
   try {
     if (c.req.method === 'POST') {
       const body = await c.req.json();
@@ -43,6 +45,8 @@ async function handlePlaybackInfo(c: any) {
       enableDirectStream = body.EnableDirectStream;
       mediaSourceId = body.MediaSourceId;
       if (body.MaxStreamingBitrate != null) maxStreamingBitrate = Number(body.MaxStreamingBitrate);
+      if (body.AudioStreamIndex != null) audioStreamIndex = Number(body.AudioStreamIndex);
+      if (body.SubtitleStreamIndex != null) subtitleStreamIndex = Number(body.SubtitleStreamIndex);
     }
   } catch { /* ignore parse errors */ }
   // query params 也可能带这些参数
@@ -61,6 +65,14 @@ async function handlePlaybackInfo(c: any) {
   if (maxStreamingBitrate === undefined) {
     const qMB = c.req.query('MaxStreamingBitrate');
     if (qMB) maxStreamingBitrate = Number(qMB);
+  }
+  if (audioStreamIndex === undefined) {
+    const qAI = c.req.query('AudioStreamIndex');
+    if (qAI) audioStreamIndex = Number(qAI);
+  }
+  if (subtitleStreamIndex === undefined) {
+    const qSI = c.req.query('SubtitleStreamIndex');
+    if (qSI) subtitleStreamIndex = Number(qSI);
   }
 
   try {
@@ -96,8 +108,23 @@ async function handlePlaybackInfo(c: any) {
     // 为所有 MediaSource 注册流元数据（HLS 转码后备需要）
     for (const ms of mediaSources) {
       const vs = videoStreams.find((v: any) => v.media_guid === ms.Id) || videoStreams[0];
-      const as = audioStreams.find((a: any) => a.media_guid === ms.Id) || audioStreams[0];
-      if (vs && as) {
+      const myAudioStreams = audioStreams.filter((a: any) => a.media_guid === ms.Id);
+      const fallbackAudio = myAudioStreams[0] || audioStreams[0];
+
+      // 如果客户端指定了 AudioStreamIndex，找到对应的音频流
+      let selectedAudio = fallbackAudio;
+      if (audioStreamIndex !== undefined && ms.MediaStreams) {
+        const targetStream = ms.MediaStreams.find((s: any) => s.Type === 'Audio' && s.Index === audioStreamIndex);
+        if (targetStream) {
+          // 通过 DisplayTitle/Language/Codec 匹配回飞牛的音频流
+          const matchIdx = audioStreamIndex - (ms.MediaStreams.findIndex((s: any) => s.Type === 'Audio'));
+          if (matchIdx >= 0 && matchIdx < myAudioStreams.length) {
+            selectedAudio = myAudioStreams[matchIdx];
+          }
+        }
+      }
+
+      if (vs && selectedAudio) {
         registerStreamMeta(ms.Id, {
           media_guid: ms.Id,
           item_guid: fnosGuid,
@@ -105,12 +132,17 @@ async function handlePlaybackInfo(c: any) {
           video_encoder: vs.codec_name || 'h264',
           resolution: vs.resolution_type || (vs.height >= 2160 ? '4k' : vs.height >= 1080 ? '1080p' : '720p'),
           bitrate: vs.bps || 15000000,
-          audio_encoder: 'aac', // 目标编码器始终用 aac（浏览器兼容）
-          audio_guid: as.guid || '',
+          audio_encoder: 'aac',
+          audio_guid: selectedAudio.guid || '',
           subtitle_guid: '',
-          channels: as.channels || 2,
+          channels: selectedAudio.channels || 2,
           duration: playInfo.item.duration || 0,
         });
+      }
+
+      // 如果客户端指定了 AudioStreamIndex，更新 DefaultAudioStreamIndex
+      if (audioStreamIndex !== undefined) {
+        ms.DefaultAudioStreamIndex = audioStreamIndex;
       }
     }
 
@@ -153,6 +185,10 @@ async function handlePlaybackInfo(c: any) {
       if (enableDirectStream === false || enableDirectPlay === false) {
         clearHlsSession(ms.Id);
       }
+      // 音频切换时也需要清除 HLS 会话
+      if (audioStreamIndex !== undefined) {
+        clearHlsSession(ms.Id);
+      }
       // 注册 media_guid → item_guid 映射
       registerMediaGuid(ms.Id, fnosGuid);
     }
@@ -164,7 +200,7 @@ async function handlePlaybackInfo(c: any) {
       PlaySessionId: playSessionId,
     };
 
-    console.log(`[PLAYBACK] PlaybackInfo: item=${itemId}, sources=${filteredSources.length}/${mediaSources.length}, mediaSourceId=${mediaSourceId || 'none'}, enableDS=${enableDirectStream}, enableDP=${enableDirectPlay}, maxBitrate=${maxStreamingBitrate || 'none'}`);
+    console.log(`[PLAYBACK] PlaybackInfo: item=${itemId}, sources=${filteredSources.length}/${mediaSources.length}, mediaSourceId=${mediaSourceId || 'none'}, enableDS=${enableDirectStream}, enableDP=${enableDirectPlay}, maxBitrate=${maxStreamingBitrate || 'none'}, audioIdx=${audioStreamIndex ?? 'none'}`);
     for (const ms of filteredSources) {
       const videoStream = ms.MediaStreams?.find((s: any) => s.Type === 'Video');
       const audioStream = ms.MediaStreams?.find((s: any) => s.Type === 'Audio' && s.Index === ms.DefaultAudioStreamIndex);

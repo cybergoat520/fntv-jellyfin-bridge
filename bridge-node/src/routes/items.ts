@@ -32,7 +32,6 @@ async function cachedGetItemList(server: string, token: string, req: { parent_gu
 
   // 并发去重：用 Promise 确保同一 key 只发一次请求
   const pending = fnosGetItemList(server, token, req).then(result => {
-  const pending = fnosGetItemList(server, token, req).then(result => {
     itemListCache.set(key, { data: result, ts: Date.now() });
     return result;
   });
