@@ -102,6 +102,10 @@ const pathSegmentMap: Record<string, string> = {
 
 app.use('*', async (c, next) => {
   const originalPath = c.req.path;
+  // 调试：打印字幕相关路径
+  if (originalPath.includes('Subtitles')) {
+    console.log(`[PATH] Subtitles请求: ${originalPath}`);
+  }
   // 跳过静态文件
   if (originalPath.startsWith('/web/')) return next();
 

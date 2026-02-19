@@ -11,12 +11,22 @@ const subtitleIndexMap = new Map<string, string>();
 
 /** 注册字幕 index → guid 映射 */
 export function registerSubtitleIndex(mediaSourceId: string, index: number, guid: string): void {
-  subtitleIndexMap.set(`${mediaSourceId}:${index}`, guid);
+  const key = `${mediaSourceId}:${index}`;
+  subtitleIndexMap.set(key, guid);
+  console.log(`[SUBTITLE_MAP] 注册: key="${key}", guid=${guid.substring(0, 8)}...`);
 }
 
 /** 获取字幕 guid */
 export function getSubtitleGuid(mediaSourceId: string, index: number): string | null {
-  return subtitleIndexMap.get(`${mediaSourceId}:${index}`) || null;
+  const key = `${mediaSourceId}:${index}`;
+  const result = subtitleIndexMap.get(key);
+  console.log(`[SUBTITLE_MAP] 查询: key="${key}", found=${!!result}, mapSize=${subtitleIndexMap.size}`);
+  if (!result) {
+    // 打印所有 key 帮助调试
+    const allKeys = Array.from(subtitleIndexMap.keys());
+    console.log(`[SUBTITLE_MAP] 所有key: ${allKeys.join(', ')}`);
+  }
+  return result || null;
 }
 
 /** Jellyfin MediaSourceInfo */
