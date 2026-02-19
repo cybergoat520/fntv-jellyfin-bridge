@@ -33,7 +33,8 @@ export function parseAuthHeader(header: string | undefined): JellyfinAuthHeader 
     params[match[1].toLowerCase()] = match[2];
   }
 
-  if (!params.client && !params.device) return null;
+  // 必须至少有一个有效字段才算解析成功
+  if (!params.client && !params.device && !params.token) return null;
 
   return {
     client: params.client || 'Unknown',
@@ -87,6 +88,9 @@ export function extractToken(c: Context): { token: string | undefined; parsed: J
 export function requireAuth() {
   return async (c: Context, next: Next) => {
     const { token, parsed } = extractToken(c);
+
+    // Debug: 打印认证信息
+    console.log(`[AUTH] ${c.req.method} ${c.req.path} - token=${token?.slice(0, 8)}..., authHeader=${c.req.header('Authorization')?.slice(0, 50)}, X-Emby=${c.req.header('X-Emby-Authorization')?.slice(0, 50)}`);
 
     if (!token) {
       return c.json({ error: 'Unauthorized' }, 401);
