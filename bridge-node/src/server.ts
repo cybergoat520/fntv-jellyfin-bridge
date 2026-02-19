@@ -105,13 +105,8 @@ app.use('*', async (c, next) => {
   // 跳过静态文件
   if (originalPath.startsWith('/web/')) return next();
 
-  // 规范化双斜杠（Xbox 客户端可能产生 //System/Info/Public）
-  let normalizedPath = originalPath.replace(/\/\//g, '/');
-  if (normalizedPath !== originalPath) {
-    console.log(`[PATH] 双斜杠规范化: ${originalPath} → ${normalizedPath}`);
-  }
-  const segments = normalizedPath.split('/');
-  let changed = normalizedPath !== originalPath;
+  const segments = originalPath.split('/');
+  let changed = false;
 
   for (let i = 0; i < segments.length; i++) {
     const lower = segments[i].toLowerCase();

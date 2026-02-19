@@ -15,8 +15,6 @@ const serverId = generateServerId(config.fnosServer);
 
 /** GET /System/Info/Public - 公开系统信息（无需认证） */
 system.get('/Info/Public', (c) => {
-  const ua = c.req.header('user-agent') || 'unknown';
-  console.log(`[SYSTEM] Info/Public request from ${ua.slice(0, 100)}`);
   // 从请求头动态获取地址，避免返回 0.0.0.0
   const host = c.req.header('host') || `${config.host}:${config.port}`;
   const proto = c.req.header('x-forwarded-proto') || 'http';
@@ -29,10 +27,7 @@ system.get('/Info/Public', (c) => {
     Id: serverId,
     StartupWizardCompleted: true,
   };
-  const response = JSON.stringify(info);
-  console.log(`[SYSTEM] Response: ${response}`);
-  c.header('Content-Type', 'application/json');
-  return c.body(response);
+  return c.json(info);
 });
 
 /** GET /System/Info - 完整系统信息（需要认证） */

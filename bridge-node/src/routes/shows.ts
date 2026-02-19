@@ -30,9 +30,7 @@ shows.get('/:seriesId/Seasons', requireAuth(), async (c) => {
   }
 
   try {
-    console.log(`[SHOWS] Seasons请求: seriesId=${seriesId}, fnosGuid=${fnosGuid}`);
     const result = await fnosGetSeasonList(session.fnosServer, session.fnosToken, fnosGuid);
-    console.log(`[SHOWS] Seasons结果: success=${result.success}, seasons=${result.data?.length || 0}`);
     if (!result.success || !result.data) {
       return c.json({ Items: [], TotalRecordCount: 0, StartIndex: 0 });
     }
@@ -89,8 +87,6 @@ shows.get('/:seriesId/Episodes', requireAuth(), async (c) => {
   const startIndex = parseInt(c.req.query('StartIndex') || '0', 10);
   const limit = parseInt(c.req.query('Limit') || '100', 10);
 
-  console.log(`[SHOWS] Episodes请求: seriesId=${seriesId}, seasonId=${seasonId}`);
-
   // episode/list 需要季 guid
   let fnosGuid: string | null = null;
   if (seasonId) {
@@ -113,7 +109,6 @@ shows.get('/:seriesId/Episodes', requireAuth(), async (c) => {
 
   try {
     const result = await fnosGetEpisodeList(session.fnosServer, session.fnosToken, fnosGuid);
-    console.log(`[SHOWS] Episodes结果: fnosGuid=${fnosGuid}, episodes=${result.data?.length || 0}`);
     if (!result.success || !result.data) {
       return c.json({ Items: [], TotalRecordCount: 0, StartIndex: startIndex });
     }

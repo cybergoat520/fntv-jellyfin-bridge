@@ -89,9 +89,6 @@ export function requireAuth() {
   return async (c: Context, next: Next) => {
     const { token, parsed } = extractToken(c);
 
-    // Debug: 打印认证信息
-    console.log(`[AUTH] ${c.req.method} ${c.req.path} - token=${token?.slice(0, 8)}..., authHeader=${c.req.header('Authorization')?.slice(0, 50)}, X-Emby=${c.req.header('X-Emby-Authorization')?.slice(0, 50)}`);
-
     if (!token) {
       return c.json({ error: 'Unauthorized' }, 401);
     }

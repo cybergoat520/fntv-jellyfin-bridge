@@ -31,7 +31,7 @@ async function cachedGetItemList(server: string, token: string, req: { parent_gu
   }
 
   // 并发去重：用 Promise 确保同一 key 只发一次请求
-  console.log(`[CACHE] item/list MISS: key=${key}`);
+  const pending = fnosGetItemList(server, token, req).then(result => {
   const pending = fnosGetItemList(server, token, req).then(result => {
     itemListCache.set(key, { data: result, ts: Date.now() });
     return result;
@@ -369,7 +369,6 @@ items.get('/:itemId', requireAuth(), async (c) => {
     }
 
     const playInfo = result.data;
-    console.log(`[ITEM] 详情: guid=${fnosGuid}, type=${playInfo.item.type}, originalType=${originalType}, media_guid=${playInfo.media_guid}, can_play=${playInfo.item.can_play}, grand_guid=${playInfo.grand_guid}, parent_guid=${playInfo.parent_guid}, item.guid=${playInfo.item.guid}, item.parent_guid=${playInfo.item.parent_guid}`);
 
     // 如果原始类型是 TV/Series，覆盖 play/info 返回的 Episode 类型
     if (originalType === 'TV' || originalType === 'Series') {
@@ -402,13 +401,11 @@ items.get('/:itemId', requireAuth(), async (c) => {
     }
 
     const dto = mapPlayInfoToDto(playInfo, serverId);
-    console.log(`[ITEM] DTO: Type=${dto.Type}, MediaType=${dto.MediaType}, Name=${dto.Name}`);
 
     // 对可播放项目，获取流信息并附加 MediaSources
     if (dto.MediaType === 'Video' && playInfo.media_guid) {
       try {
         const streamResult = await fnosGetStreamList(session.fnosServer, session.fnosToken, fnosGuid);
-        console.log(`[ITEM] streamResult: success=${streamResult.success}, hasData=${!!streamResult.data}, videoStreams=${streamResult.data?.video_streams?.length || 0}, files=${streamResult.data?.files?.length || 0}`);
         if (streamResult.success && streamResult.data) {
           const sd = streamResult.data;
           const mediaSources = buildMediaSources(
@@ -424,7 +421,6 @@ items.get('/:itemId', requireAuth(), async (c) => {
           for (const ms of mediaSources) {
             registerMediaGuid(ms.Id, fnosGuid);
           }
-          console.log(`[ITEM] MediaSources: count=${mediaSources.length}, names=[${mediaSources.map(s => s.Name).join(', ')}]`);
           // jellyfin-web 的 getItem 调用期望顶层有 MediaStreams
           if (mediaSources.length > 0) {
             (dto as any).MediaStreams = mediaSources[0].MediaStreams;
