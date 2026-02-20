@@ -13,6 +13,7 @@ use axum::{
     Json, Router,
 };
 use serde_json::json;
+use tower::ServiceExt;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 use tracing::{info, warn};
@@ -59,10 +60,7 @@ async fn main() {
 }
 
 fn build_router(config: BridgeConfig) -> Router {
-    // 路径大小写规范化中间件
-    let normalize = axum::middleware::from_fn(path_normalize);
-
-    Router::new()
+    let inner = Router::new()
         // 核心路由
         .merge(fnos_bridge::routes::system::router())
         .merge(fnos_bridge::routes::users::router())
@@ -116,10 +114,15 @@ fn build_router(config: BridgeConfig) -> Router {
         .route("/favicon.ico", get(no_content))
         // 兜底
         .fallback(any(fallback))
-        // 中间件
-        .layer(normalize)
         .layer(CorsLayer::permissive())
-        .with_state(config)
+        .with_state(config);
+
+    // 路径规范化必须在路由匹配之前，用外层 Router 包裹
+    Router::new()
+        .fallback(any(move |req: axum::extract::Request| async move {
+            let normalized = normalize_path(req);
+            inner.oneshot(normalized).await.into_response()
+        }))
 }
 
 // --- 辅助 handler ---
@@ -302,12 +305,9 @@ async fn handle_ws(mut socket: WebSocket) {
     }
 }
 
-// --- 路径大小写规范化中间件 ---
+// --- 路径大小写规范化 ---
 
-async fn path_normalize(
-    req: axum::extract::Request,
-    next: axum::middleware::Next,
-) -> Response {
+fn normalize_path(req: axum::extract::Request) -> axum::extract::Request {
     use std::collections::HashMap;
 
     static PATH_MAP_ENTRIES: &[(&str, &str)] = &[
@@ -340,7 +340,7 @@ async fn path_normalize(
 
     // 跳过静态文件
     if path.starts_with("/web/") {
-        return next.run(req).await;
+        return req;
     }
 
     let path_map: HashMap<&str, &str> = PATH_MAP_ENTRIES.iter().copied().collect();
@@ -351,7 +351,6 @@ async fn path_normalize(
         .iter()
         .map(|seg| {
             let lower = seg.to_lowercase();
-            // stream.xxx → stream (去掉扩展名)
             if lower.starts_with("stream.") && !path.to_lowercase().contains("subtitles") {
                 changed = true;
                 return "stream".to_string();
@@ -375,9 +374,8 @@ async fn path_normalize(
 
         let (mut parts, body) = req.into_parts();
         parts.uri = new_uri;
-        let req = axum::extract::Request::from_parts(parts, body);
-        return next.run(req).await;
+        return axum::extract::Request::from_parts(parts, body);
     }
 
-    next.run(req).await
+    req
 }
