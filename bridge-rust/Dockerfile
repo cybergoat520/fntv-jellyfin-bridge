@@ -1,4 +1,4 @@
-# Stage 1: Build
+# Stage 1: Build Rust binary
 FROM rust:1.85-slim AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
@@ -16,7 +16,11 @@ FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 
+WORKDIR /app
 COPY --from=builder /app/target/release/fnos-bridge /usr/local/bin/fnos-bridge
+
+# jellyfin-web 通过卷挂载到 /app/web
+VOLUME /app/web
 
 ENV BRIDGE_PORT=8096
 EXPOSE 8096

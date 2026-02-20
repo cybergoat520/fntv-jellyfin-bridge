@@ -1,9 +1,11 @@
 services:
   fnos-bridge:
-    build: .
+    image: fnos-bridge:latest
     ports:
       - "8096:8096"
     environment:
       - FNOS_SERVER=http://your-nas:5666
       - BRIDGE_PORT=8096
+    volumes:
+      - ./web:/app/web
     restart: unless-stopped

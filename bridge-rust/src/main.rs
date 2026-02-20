@@ -14,6 +14,7 @@ use axum::{
 };
 use serde_json::json;
 use tower_http::cors::CorsLayer;
+use tower_http::services::ServeDir;
 use tracing::{info, warn};
 
 use fnos_bridge::config::BridgeConfig;
@@ -108,11 +109,10 @@ fn build_router(config: BridgeConfig) -> Router {
         .route("/Playback/BitrateTest", get(bitrate_test))
         // 旧版路径兼容
         .route("/Users/{userId}/Views", get(redirect_user_views))
-        .route("/Users/{userId}/Items/Resume", get(redirect_user_resume))
         // 根路径
         .route("/", head(root_head).get(root_get))
         .route("/web", get(|| async { Redirect::to("/web/") }))
-        .route("/web/", get(web_index))
+        .nest_service("/web/", ServeDir::new("web"))
         .route("/favicon.ico", get(no_content))
         // 兜底
         .fallback(any(fallback))
