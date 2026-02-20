@@ -1,0 +1,6 @@
+[build]
+# 使用 MSVC 目标（需要安装 Visual Studio Build Tools）
+# 如果使用 MinGW，取消下面两行注释：
+# target = "x86_64-pc-windows-gnu"
+# [target.x86_64-pc-windows-gnu]
+# linker = "gcc"

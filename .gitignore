@@ -3,3 +3,4 @@ bridge-node/web/
 .sessions.json
 web-tmp
 jellyfin-web-10.11.6.zip
+bridge-rust/target/
