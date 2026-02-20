@@ -6,7 +6,7 @@ use axum::{
     http::{header, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
-    Router,
+    Extension, Router,
 };
 
 use crate::config::BridgeConfig;
@@ -31,29 +31,25 @@ pub fn router() -> Router<BridgeConfig> {
 async fn proxy_image(
     State(config): State<BridgeConfig>,
     Path((item_id, image_type)): Path<(String, String)>,
-    req: axum::extract::Request,
+    Extension(session): Extension<SessionData>,
 ) -> Response {
-    do_proxy_image(&config, &item_id, &image_type, &req).await
+    do_proxy_image(&config, &item_id, &image_type, &session).await
 }
 
 async fn proxy_image_indexed(
     State(config): State<BridgeConfig>,
     Path((item_id, image_type, _index)): Path<(String, String, String)>,
-    req: axum::extract::Request,
+    Extension(session): Extension<SessionData>,
 ) -> Response {
-    do_proxy_image(&config, &item_id, &image_type, &req).await
+    do_proxy_image(&config, &item_id, &image_type, &session).await
 }
 
 async fn do_proxy_image(
     config: &BridgeConfig,
     item_id: &str,
     image_type: &str,
-    req: &axum::extract::Request,
+    session: &SessionData,
 ) -> Response {
-    let session = match req.extensions().get::<SessionData>() {
-        Some(s) => s.clone(),
-        None => return StatusCode::UNAUTHORIZED.into_response(),
-    };
 
     let fnos_guid = match to_fnos_guid(item_id) {
         Some(g) => g,

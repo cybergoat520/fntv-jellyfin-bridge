@@ -75,7 +75,7 @@ impl FnosClient {
         &self.token
     }
 
-    pub async fn request<T: DeserializeOwned>(
+    pub async fn request<T: DeserializeOwned + Send>(
         &self,
         method: &str,
         url: &str,
@@ -85,7 +85,7 @@ impl FnosClient {
             .await
     }
 
-    fn request_internal<'a, T: DeserializeOwned>(
+    fn request_internal<'a, T: DeserializeOwned + Send>(
         &'a self,
         base_url: &'a str,
         method: &'a str,
