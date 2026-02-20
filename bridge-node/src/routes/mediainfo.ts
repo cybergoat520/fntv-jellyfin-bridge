@@ -181,6 +181,15 @@ async function handlePlaybackInfo(c: any) {
           ms.TranscodingUrl = `${ms.TranscodingUrl}&MaxStreamingBitrate=${maxStreamingBitrate}`;
         }
       }
+      // 字幕 DeliveryUrl 也需要注入 api_key
+      if (userToken && ms.MediaStreams) {
+        for (const stream of ms.MediaStreams) {
+          if (stream.DeliveryUrl && stream.Type === 'Subtitle') {
+            const sep = stream.DeliveryUrl.includes('?') ? '&' : '?';
+            stream.DeliveryUrl = `${stream.DeliveryUrl}${sep}api_key=${userToken}`;
+          }
+        }
+      }
       // 质量切换时清除 HLS 会话缓存，让下次请求重新启动转码
       if (enableDirectStream === false || enableDirectPlay === false) {
         clearHlsSession(ms.Id);

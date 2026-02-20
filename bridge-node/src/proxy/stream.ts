@@ -378,7 +378,7 @@ export async function handleHlsStream(
   const fnosPath = `/v/media/${hlsSession.sessionGuid}/${actualFile}`;
   const targetUrl = `${fnosServer}${fnosPath}`;
 
-  console.log(`[HLS] 代理: mediaGuid=${mediaGuid} → sessionGuid=${hlsSession.sessionGuid}, file=${actualFile}`);
+  console.log(`[HLS] 代理: mediaGuid=${mediaGuid} → sessionGuid=${hlsSession.sessionGuid}, file=${actualFile}, url=${targetUrl}`);
 
   const extra: Record<string, string> = {
     'Authorization': fnosToken,
@@ -390,6 +390,16 @@ export async function handleHlsStream(
 
   // 设置 no-cache 头，防止浏览器缓存 HLS 响应（避免缓存 410 等错误）
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+
+  // subtitle.m3u8 — 生成字幕分片播放列表
+  if (file === 'subtitle.m3u8') {
+    return handleSubtitleM3u8(req, res, fnosServer, fnosToken, hlsSession.sessionGuid);
+  }
+
+  // preset.m3u8 — 注入字幕轨道
+  if (actualFile === 'preset.m3u8') {
+    return handlePresetM3u8(req, res, targetUrl, headers, mediaGuid, fnosServer, fnosToken, hlsSession.sessionGuid);
+  }
 
   // 410 重试：清除旧会话 → 重建 → 用新 sessionGuid 重新代理
   const on410Retry = session ? async () => {
@@ -421,7 +431,11 @@ export async function handleHlsStream(
       const retryHeaders = buildUpstreamHeaders(req, retryExtra);
 
       // 重试不再带 on410Retry，避免无限循环
-      pipeProxy(newUrl, retryHeaders, config.ignoreCert, req, res, 'HLS-RETRY');
+      if (file === 'preset.m3u8') {
+        handlePresetM3u8(req, res, newUrl, retryHeaders, mediaGuid);
+      } else {
+        pipeProxy(newUrl, retryHeaders, config.ignoreCert, req, res, 'HLS-RETRY');
+      }
     } catch (e: any) {
       console.error(`[HLS] 410 重试异常:`, e.message);
       if (!res.headersSent) {
@@ -432,4 +446,104 @@ export async function handleHlsStream(
   } : undefined;
 
   pipeProxy(targetUrl, headers, config.ignoreCert, req, res, 'HLS', false, on410Retry);
+}
+
+/**
+ * 处理 preset.m3u8 — 注入字幕轨道
+ */
+async function handlePresetM3u8(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  targetUrl: string,
+  headers: Record<string, string>,
+  mediaGuid: string,
+  fnosServer: string,
+  fnosToken: string,
+  sessionGuid: string,
+) {
+  try {
+    const upstreamRes = await new Promise<http.IncomingMessage>((resolve, reject) => {
+      const client = targetUrl.startsWith('https:') ? https : http;
+      const upstreamReq = client.get(targetUrl, { headers }, resolve);
+      upstreamReq.on('error', reject);
+    });
+
+    if (upstreamRes.statusCode !== 200) {
+      res.writeHead(upstreamRes.statusCode || 502);
+      upstreamRes.pipe(res);
+      return;
+    }
+
+    let m3u8Content = '';
+    upstreamRes.setEncoding('utf8');
+    upstreamRes.on('data', (chunk: string) => { m3u8Content += chunk; });
+    upstreamRes.on('end', () => {
+      // 注入字幕轨道引用
+      const subtitleLine = `#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="Subtitle",DEFAULT=YES,AUTOSELECT=YES,FORCED=NO,LANGUAGE="und",URI="subtitle.m3u8"`;
+      m3u8Content = m3u8Content.replace('#EXTM3U', `#EXTM3U\n${subtitleLine}`);
+
+      res.writeHead(200, {
+        'Content-Type': 'application/vnd.apple.mpegurl',
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+      });
+      res.end(m3u8Content);
+    });
+  } catch (e: any) {
+    console.error(`[HLS] preset.m3u8 处理失败:`, e.message);
+    res.writeHead(502);
+    res.end('Failed to process m3u8');
+  }
+}
+
+/**
+ * 处理 subtitle.m3u8 — 生成字幕分片播放列表
+ */
+async function handleSubtitleM3u8(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  fnosServer: string,
+  fnosToken: string,
+  sessionGuid: string,
+) {
+  const presetPath = `/v/media/${sessionGuid}/preset.m3u8`;
+  const targetUrl = `${fnosServer}${presetPath}`;
+  const authx = generateAuthxString(presetPath);
+
+  const headers: Record<string, string> = {
+    'Authorization': fnosToken,
+    'Cookie': 'mode=relay',
+    'Authx': authx,
+  };
+
+  try {
+    const upstreamRes = await new Promise<http.IncomingMessage>((resolve, reject) => {
+      const client = targetUrl.startsWith('https:') ? https : http;
+      const upstreamReq = client.get(targetUrl, { headers }, resolve);
+      upstreamReq.on('error', reject);
+    });
+
+    if (upstreamRes.statusCode !== 200) {
+      res.writeHead(upstreamRes.statusCode || 502);
+      upstreamRes.pipe(res);
+      return;
+    }
+
+    let m3u8Content = '';
+    upstreamRes.setEncoding('utf8');
+    upstreamRes.on('data', (chunk: string) => { m3u8Content += chunk; });
+    upstreamRes.on('end', () => {
+      // 把 .ts 替换成 .vtt
+      const subtitleM3u8 = m3u8Content.replace(/^(\d+\.ts)$/gm, (match) => match.replace('.ts', '.vtt'));
+
+      res.writeHead(200, {
+        'Content-Type': 'application/vnd.apple.mpegurl',
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+      });
+      res.end(subtitleM3u8);
+    });
+  } catch (e: any) {
+    console.error(`[HLS] subtitle.m3u8 生成失败:`, e.message);
+    res.writeHead(502);
+    res.end('Failed to generate subtitle m3u8');
+  }
 }

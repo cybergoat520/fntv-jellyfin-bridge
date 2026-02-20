@@ -6,27 +6,28 @@
 import { toJellyfinId } from './id.ts';
 import { secondsToTicks } from './item.ts';
 
-/** 字幕 index → guid 映射缓存（key: `${mediaSourceId}:${index}`） */
-const subtitleIndexMap = new Map<string, string>();
-
-/** 注册字幕 index → guid 映射 */
-export function registerSubtitleIndex(mediaSourceId: string, index: number, guid: string): void {
-  const key = `${mediaSourceId}:${index}`;
-  subtitleIndexMap.set(key, guid);
-  console.log(`[SUBTITLE_MAP] 注册: key="${key}", guid=${guid.substring(0, 8)}...`);
+/** 字幕信息 */
+export interface SubtitleInfo {
+  guid: string;
+  fnosStreamIndex: number;
+  language: string;
+  title: string;
+  codec: string;
+  isExternal: boolean;
 }
 
-/** 获取字幕 guid */
-export function getSubtitleGuid(mediaSourceId: string, index: number): string | null {
+/** 字幕信息映射缓存（key: `${mediaSourceId}:${index}`） */
+const subtitleInfoMap = new Map<string, SubtitleInfo>();
+
+/** 注册字幕信息 */
+export function registerSubtitleInfo(mediaSourceId: string, index: number, info: SubtitleInfo): void {
   const key = `${mediaSourceId}:${index}`;
-  const result = subtitleIndexMap.get(key);
-  console.log(`[SUBTITLE_MAP] 查询: key="${key}", found=${!!result}, mapSize=${subtitleIndexMap.size}`);
-  if (!result) {
-    // 打印所有 key 帮助调试
-    const allKeys = Array.from(subtitleIndexMap.keys());
-    console.log(`[SUBTITLE_MAP] 所有key: ${allKeys.join(', ')}`);
-  }
-  return result || null;
+  subtitleInfoMap.set(key, info);
+}
+
+/** 获取字幕信息 */
+export function getSubtitleInfo(mediaSourceId: string, index: number): SubtitleInfo | undefined {
+  return subtitleInfoMap.get(`${mediaSourceId}:${index}`);
 }
 
 /** Jellyfin MediaSourceInfo */
@@ -218,20 +219,23 @@ function buildSingleMediaSource(
   for (const ss of subtitleStreams) {
     const subIndex = streamIndex++;
     const subStream = mapSubtitleStream(ss, subIndex);
-    // 文本字幕加上 DeliveryUrl，客户端直接下载而不需要转码烧录
+    // 文本字幕加上 DeliveryUrl（在 mediainfo.ts 中会附加 api_key）
+    // 使用 .vtt 作为基础格式，jellyfin-web 会替换成 .js 获取 JSON TrackEvents
     if (subStream.IsTextSubtitleStream) {
-      const codec = (ss.codec_name || ss.format || 'srt').toLowerCase();
-      const format = codec === 'ass' || codec === 'ssa' ? 'ass' : codec === 'webvtt' || codec === 'vtt' ? 'vtt' : 'srt';
       subStream.DeliveryMethod = 'External';
-      subStream.DeliveryUrl = `/Videos/${mediaGuid}/${mediaGuid}/Subtitles/${subIndex}/Stream.${format}`;
+      subStream.DeliveryUrl = `/Videos/${mediaGuid}/${mediaGuid}/Subtitles/${subIndex}/Stream.vtt`;
     }
     mediaStreams.push(subStream);
-    // 注册 index → guid 映射，供字幕代理使用
+    // 注册字幕信息，供字幕代理使用
     if (ss.guid) {
-      registerSubtitleIndex(mediaGuid, subIndex, ss.guid);
-      console.log(`[SUBTITLE] 注册映射: mediaGuid=${mediaGuid}, index=${subIndex}, guid=${ss.guid}`);
-    } else {
-      console.log(`[SUBTITLE] 跳过注册（无guid）: mediaGuid=${mediaGuid}, index=${subIndex}, title=${ss.title}`);
+      registerSubtitleInfo(mediaGuid, subIndex, {
+        guid: ss.guid,
+        fnosStreamIndex: ss.index ?? subIndex,
+        language: ss.language || '',
+        title: ss.title || '',
+        codec: ss.codec_name || ss.format || 'srt',
+        isExternal: ss.is_external === 1,
+      });
     }
   }
 

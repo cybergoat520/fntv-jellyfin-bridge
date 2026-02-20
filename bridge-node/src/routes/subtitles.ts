@@ -8,105 +8,104 @@ import axios from 'axios';
 import { config } from '../config.ts';
 import { extractToken } from '../middleware/auth.ts';
 import { optionalAuth } from '../middleware/auth.ts';
-import type { SessionData } from '../services/session.ts';
 import { generateAuthxString } from '../fnos-client/signature.ts';
-import { getSubtitleGuid } from '../mappers/media.ts';
+import { getSubtitleInfo } from '../mappers/media.ts';
 
 const subtitles = new Hono();
 
 /**
  * GET /Videos/:itemId/:mediaSourceId/Subtitles/:index/*
- * 字幕文件代理，支持原始格式和 .js (JSON TrackEvents) 格式
+ * 字幕文件代理
+ * 支持格式: .js (JSON TrackEvents), .vtt, .srt
  */
 subtitles.get('/:itemId/:mediaSourceId/Subtitles/:index/*', optionalAuth(), handleSubtitle);
 
 async function handleSubtitle(c: any) {
-  console.log(`[SUBTITLE] 收到请求: ${c.req.path}`);
-  const session = c.get('session') as SessionData | undefined;
   const mediaSourceId = c.req.param('mediaSourceId');
   const index = parseInt(c.req.param('index'), 10);
-  console.log(`[SUBTITLE] 解析参数: mediaSourceId=${mediaSourceId}, index=${index}`);
-  // 从路径末尾提取格式：Stream.srt → srt, Stream.js → js
+
+  // 从路径末尾提取格式
   const pathParts = c.req.path.split('/');
   const lastPart = pathParts[pathParts.length - 1] || '';
   const format = lastPart.includes('.') ? lastPart.split('.').pop() || 'srt' : 'srt';
 
-  // 通过 index → guid 映射找到飞牛字幕 guid
-  const subtitleGuid = getSubtitleGuid(mediaSourceId, index);
-  if (!subtitleGuid) {
-    console.error(`[SUBTITLE] 未找到字幕映射: mediaSourceId=${mediaSourceId}, index=${index}`);
+  // 获取字幕信息
+  const subtitleInfo = getSubtitleInfo(mediaSourceId, index);
+  if (!subtitleInfo) {
+    console.error(`[SUBTITLE] 未找到字幕: mediaSourceId=${mediaSourceId}, index=${index}`);
     return c.body('Subtitle not found', 404);
   }
 
   // 获取认证信息
-  let server = session?.fnosServer || config.fnosServer;
-  let token = session?.fnosToken || '';
+  const apiKey = c.req.query('api_key');
+  let token = '';
+  let server = config.fnosServer;
+
+  if (apiKey) {
+    const { getSession } = await import('../services/session.ts');
+    const sess = getSession(apiKey);
+    if (sess) {
+      token = sess.fnosToken;
+      server = sess.fnosServer;
+    }
+  }
+
   if (!token) {
-    const { token: apiKey } = extractToken(c);
-    if (apiKey) {
-      const { getSession } = await import('../services/session.ts');
-      const sess = getSession(apiKey);
-      if (sess) {
-        server = sess.fnosServer;
-        token = sess.fnosToken;
+    return c.body('Unauthorized', 401);
+  }
+
+  // 外挂字幕：使用 subtitle/dl/{guid} API
+  if (subtitleInfo.isExternal) {
+    const subtitleUrl = `/v/api/v1/subtitle/dl/${subtitleInfo.guid}`;
+    const fullUrl = `${server}${subtitleUrl}`;
+    const authx = generateAuthxString(subtitleUrl);
+
+    try {
+      const response = await axios.get(fullUrl, {
+        headers: {
+          'Authorization': token,
+          'Cookie': 'mode=relay',
+          'Authx': authx,
+        },
+        responseType: 'arraybuffer',
+        timeout: 30000,
+        validateStatus: () => true,
+      });
+
+      if (response.status !== 200) {
+        return c.body('Subtitle fetch failed', response.status);
       }
+
+      const text = Buffer.from(response.data).toString('utf-8');
+
+      // .js 格式：返回 JSON TrackEvents
+      if (format === 'js') {
+        const trackEvents = parseSrtToTrackEvents(text);
+        return c.json({ TrackEvents: trackEvents });
+      }
+
+      // .vtt 格式：转换为 WebVTT
+      if (format === 'vtt') {
+        const vtt = convertSrtToVtt(text);
+        c.header('Content-Type', 'text/vtt; charset=utf-8');
+        return c.body(vtt);
+      }
+
+      // 其他格式：返回原始内容
+      c.header('Content-Type', 'text/plain; charset=utf-8');
+      return c.body(text);
+    } catch (e: any) {
+      console.error(`[SUBTITLE] 外挂字幕获取失败:`, e.message);
+      return c.body('Subtitle error', 502);
     }
   }
 
-  const url = `/v/api/v1/subtitle/dl/${subtitleGuid}`;
-  const fullUrl = `${server}${url}`;
-
-  try {
-    const authx = generateAuthxString(url);
-    const response = await axios.get(fullUrl, {
-      headers: {
-        'Authorization': token,
-        'Cookie': 'mode=relay',
-        'Authx': authx,
-      },
-      responseType: 'arraybuffer',
-      timeout: 15000,
-    });
-
-    const rawData = Buffer.from(response.data);
-    const text = rawData.toString('utf-8');
-
-    // .js 格式：jellyfin-web 期望 JSON { TrackEvents: [...] }
-    if (format === 'js') {
-      const trackEvents = parseSrtToTrackEvents(text);
-      c.header('Content-Type', 'application/json; charset=utf-8');
-      c.header('Cache-Control', 'public, max-age=86400');
-      return c.json({ TrackEvents: trackEvents });
-    }
-
-    // .vtt 格式：转换 SRT → WebVTT
-    if (format === 'vtt') {
-      const vtt = convertSrtToVtt(text);
-      c.header('Content-Type', 'text/vtt; charset=utf-8');
-      c.header('Cache-Control', 'public, max-age=86400');
-      return c.body(vtt);
-    }
-
-    // 原始格式
-    const contentTypeMap: Record<string, string> = {
-      srt: 'text/plain; charset=utf-8',
-      subrip: 'text/plain; charset=utf-8',
-      ass: 'text/plain; charset=utf-8',
-      ssa: 'text/plain; charset=utf-8',
-      sub: 'text/plain; charset=utf-8',
-    };
-    c.header('Content-Type', contentTypeMap[format] || 'application/octet-stream');
-    c.header('Cache-Control', 'public, max-age=86400');
-    return c.body(response.data);
-  } catch (e: any) {
-    console.error('字幕代理失败:', e.message);
-    return c.body('Subtitle not found', 404);
-  }
+  // 内嵌字幕：暂不支持
+  return c.body('Internal subtitles not supported yet', 501);
 }
 
 /**
  * 解析 SRT 时间戳为 ticks (100ns 单位)
- * 格式: 00:01:23,456 → ticks
  */
 function parseSrtTimestamp(ts: string): number {
   const match = ts.trim().match(/(\d+):(\d+):(\d+)[,.](\d+)/);
@@ -123,14 +122,12 @@ function parseSrtTimestamp(ts: string): number {
  */
 function parseSrtToTrackEvents(srt: string): any[] {
   const events: any[] = [];
-  // 按空行分割字幕块
   const blocks = srt.replace(/\r\n/g, '\n').split(/\n\n+/);
 
   for (const block of blocks) {
     const lines = block.trim().split('\n');
     if (lines.length < 2) continue;
 
-    // 找到时间行（包含 -->）
     let timeLineIdx = -1;
     for (let i = 0; i < lines.length; i++) {
       if (lines[i].includes('-->')) {
