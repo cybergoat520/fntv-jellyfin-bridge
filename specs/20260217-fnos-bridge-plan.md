@@ -9,7 +9,7 @@
 ```
 ┌───────────────────┐     Jellyfin API      ┌───────────────┐     飞牛 API      ┌───────────────┐
 │  Jellyfin 客户端  │  ──────────────────→  │  fnos-bridge  │  ──────────────→  │  飞牛影视 NAS  │
-│  (Web/Xbox 等)    │  ←──────────────────  │  (Node.js)    │  ←──────────────  │               │
+│  (Web/Xbox 等)    │  ←──────────────────  │  (Rust/Axum)  │  ←──────────────  │               │
 └───────────────────┘                       └───────────────┘                   └───────────────┘
 ```
 
@@ -19,12 +19,13 @@
 
 | 项目 | 选择 | 理由 |
 |------|------|------|
-| 运行时 | Node.js 24 | 原生 TypeScript，与 fnos-auth 一致 |
-| HTTP 框架 | Hono + 原生 Node.js | Hono 处理 API 路由；原生 http 处理视频流代理（绕过框架超时限制） |
-| 飞牛客户端 | fnos-auth (FnosClient) | 已有模块，自动签名/重试/重定向 |
-| 视频代理 | 原生 Node.js pipe() | 参考 fntv-electron 的 proxy 模块逻辑，无超时限制 |
+| 运行时 | Rust | 高性能、低内存占用、单二进制部署 |
+| HTTP 框架 | Axum 0.8 | 异步、类型安全、与 tokio 生态集成 |
+| 异步运行时 | Tokio | Rust 异步标准 |
+| HTTP 客户端 | reqwest | 流式传输、连接池 |
+| 视频代理 | reqwest stream | 零拷贝流式代理 |
 | HLS 转码 | 飞牛 play/play API | 飞牛支持服务端 HLS 转码（音频转 AAC） |
-| ID 映射 | 确定性 UUID v5 生成 | 飞牛 GUID → Jellyfin UUID 的双向映射 |
+| ID 映射 | 确定性哈希 | 飞牛 GUID → Jellyfin UUID 的双向映射 |
 
 ## Jellyfin 客户端启动流程分析
 
@@ -255,64 +256,70 @@ const seconds = ticks / 10_000_000;
 const ticks = seconds * 10_000_000;
 ```
 
-### 第五阶段：增强功能（待实现）
+### 第五阶段：增强功能 ✅ 部分完成
 
 | 功能 | 说明 | 状态 |
 |---|---|---|
-| 搜索 | `GET /Items` 带 searchTerm 参数 | ❌ |
-| 继续观看 | `GET /Items?Filters=IsResumable` | ❌ |
-| 最近添加 | `GET /Items?SortBy=DateCreated&SortOrder=Descending` | ❌ |
-| 下一集 | `GET /Shows/NextUp` | ❌ |
-| 收藏 | `POST /UserFavoriteItems/{itemId}` | ❌ |
+| 搜索 | `GET /Items` 带 searchTerm 参数 | ✅ |
+| 继续观看 | `GET /UserItems/Resume` | ✅ |
+| 最近添加 | `GET /Items/Latest` | ✅ |
+| 下一集 | `GET /Shows/NextUp` | ⚠️ 返回空（暂未实现） |
+| 收藏 | `POST /UserFavoriteItems/{itemId}` | ✅ |
+| 过滤器 | `GET /Items/Filters` | ✅ |
+| 播放心跳 | `POST /Sessions/Playing/Ping` | ✅ |
 
 ## 项目结构
 
 ```
 fnos-bridge/
-├── fnos-auth/                    # 子模块：飞牛认证
+├── fnos-auth/                    # 子模块：飞牛认证（TypeScript 参考）
 ├── fntv-electron/                # 子模块：参考资料
-├── jellyfin-web/                 # 子模块：参考资料
-├── jellyfin-xbox/                # 子模块：参考资料
+├── jellyfin-web/                 # 子模块：Jellyfin Web UI
 ├── specs/                        # 设计文档
-├── bridge-node/
-│   ├── package.json
-│   ├── tsconfig.json
-│   ├── tests/
-│   │   └── smoke.test.ts         # 冒烟测试
-│   └── src/
-│       ├── index.ts              # 入口，HTTP + WebSocket 服务器
-│       ├── server.ts             # Hono 应用配置 + 路由注册
-│       ├── config.ts             # 配置（端口、飞牛地址等）
-│       ├── middleware/
-│       │   └── auth.ts           # Jellyfin Authorization 头解析 + 认证中间件
-│       ├── routes/
-│       │   ├── system.ts         # /System/* 端点
-│       │   ├── branding.ts       # /Branding/* 端点
-│       │   ├── users.ts          # /Users/* 认证 + 用户信息
-│       │   ├── items.ts          # /Items/* 媒体浏览
-│       │   ├── shows.ts          # /Shows/* 剧集
-│       │   ├── images.ts         # 图片代理
-│       │   ├── videos.ts         # /Videos/* 视频流（Hono 路由，转发到原生代理）
-│       │   ├── mediainfo.ts      # /Items/*/PlaybackInfo 播放信息 + 流元数据注册
-│       │   ├── playback.ts       # /Sessions/Playing/* 播放状态
-│       │   ├── hls.ts            # HLS 路由（Hono 版，转发到原生代理）
-│       │   └── subtitles.ts      # 字幕代理
-│       ├── proxy/
-│       │   └── stream.ts         # 原生 Node.js 流式代理（DirectStream + HLS）
-│       ├── services/
-│       │   ├── fnos.ts           # 飞牛 API 封装（login, play/info, play/play 等）
-│       │   ├── session.ts        # 会话管理（token 映射、持久化）
-│       │   └── hls-session.ts    # HLS 转码会话管理（StreamMeta + sessionGuid 缓存）
-│       ├── mappers/
-│       │   ├── id.ts             # ID 映射（飞牛 GUID ↔ Jellyfin UUID v5）
-│       │   ├── item.ts           # 飞牛 Item → Jellyfin BaseItemDto
-│       │   ├── user.ts           # 飞牛 UserInfo → Jellyfin UserDto
-│       │   └── media.ts          # 飞牛 Stream → Jellyfin MediaSource/MediaStream
-│       ├── fnos-client/
-│       │   ├── client.ts         # 飞牛 HTTP 客户端（Authx 签名、重试）
-│       │   └── signature.ts      # Authx 签名计算
-│       └── types/
-│           └── fnos.ts           # 飞牛 API 类型定义
+├── docs/                         # 用户文档
+├── bridge-rust/                  # Rust 实现（主要）
+│   ├── Cargo.toml
+│   ├── src/
+│   │   ├── main.rs               # 入口，HTTP + WebSocket 服务器
+│   │   ├── lib.rs                # 库导出
+│   │   ├── config.rs             # 配置（端口、飞牛地址等）
+│   │   ├── middleware/
+│   │   │   └── auth.rs           # Jellyfin Authorization 头解析 + 认证中间件
+│   │   ├── routes/
+│   │   │   ├── system.rs         # /System/* + /Branding/* 端点
+│   │   │   ├── users.rs          # /Users/* 认证 + 用户信息
+│   │   │   ├── views.rs          # /UserViews 媒体库列表
+│   │   │   ├── items.rs          # /Items/* 媒体浏览
+│   │   │   ├── shows.rs          # /Shows/* 剧集
+│   │   │   ├── images.rs         # 图片代理
+│   │   │   ├── mediainfo.rs      # /Items/*/PlaybackInfo 播放信息
+│   │   │   ├── playback.rs       # /Sessions/Playing/* 播放状态
+│   │   │   └── extras.rs         # 收藏、继续观看等
+│   │   ├── proxy/
+│   │   │   └── stream.rs         # 流式代理（DirectStream + HLS + 字幕）
+│   │   ├── services/
+│   │   │   ├── fnos.rs           # 飞牛 API 封装
+│   │   │   ├── session.rs        # 会话管理（token 映射、持久化）
+│   │   │   ├── hls_session.rs    # HLS 转码会话管理
+│   │   │   ├── image_cache.rs    # 图片缓存
+│   │   │   └── item_list_cache.rs # 项目列表缓存
+│   │   ├── mappers/
+│   │   │   ├── id.rs             # ID 映射（飞牛 GUID ↔ Jellyfin UUID）
+│   │   │   ├── item.rs           # 飞牛 Item → Jellyfin BaseItemDto
+│   │   │   ├── user.rs           # 飞牛 UserInfo → Jellyfin UserDto
+│   │   │   └── media.rs          # 飞牛 Stream → Jellyfin MediaSource/MediaStream
+│   │   ├── fnos_client/
+│   │   │   ├── client.rs         # 飞牛 HTTP 客户端（Authx 签名、重试）
+│   │   │   └── signature.rs      # Authx 签名计算
+│   │   └── types/
+│   │       ├── fnos.rs           # 飞牛 API 类型定义
+│   │       └── jellyfin.rs       # Jellyfin API 类型定义
+│   └── web/                      # Jellyfin Web UI 静态文件
+├── bridge-test/                  # 测试套件（TypeScript）
+│   ├── tests/                    # 测试用例
+│   ├── lib/                      # 测试工具
+│   └── docs/                     # 测试文档
+└── bridge-node/                  # Node.js 实现（已弃用）
 ```
 
 ## 已知限制与风险
@@ -320,17 +327,41 @@ fnos-bridge/
 1. **HLS 转码限制**：飞牛支持 HLS 转码（音频转 AAC），但多码流文件（同一影片有两个文件版本）的 HLS 转码还有问题，可能是流元数据注册或 session 管理冲突。
 2. **云盘播放**：云盘直链有过期时间和速率限制，需要参考 fntv-electron proxy 模块的处理逻辑。已有基本支持但未充分测试。
 3. **飞牛 API 稳定性**：飞牛影视 API 非公开文档，可能随版本更新变化。
-4. **并发限制**：飞牛 API 的 Authx 签名基于时间戳，高并发下可能出现签名冲突（fnos-auth 已有重试机制）。
+4. **并发限制**：飞牛 API 的 Authx 签名基于时间戳，高并发下可能出现签名冲突（已有重试机制）。
 5. **媒体库结构差异**：飞牛的媒体组织方式与 Jellyfin 不完全一致，需要在映射层做适配。
 6. **Quality 菜单**：兼容音频文件的 `SupportsTranscoding` 为 `false`，Quality 菜单不显示。需要更精细的策略。
 7. **外挂字幕**：基本实现但未充分测试。
+8. **HEAD 请求**：飞牛 API 不支持 HEAD 请求（返回 501），视频流端点不支持 HEAD 方法。
+9. **路由匹配**：Axum/matchit 不支持动态后缀（如 `stream.{ext}`），通过路径规范化转换为 `stream/{ext}` 格式。
 
 ## 开发优先级
 
 ```
 第一阶段（P0）：基础框架 + 认证     → ✅ 客户端能连接登录
 第二阶段（P0）：媒体库浏览          → ✅ 客户端能看到内容列表和封面
-第三阶段（P0）：视频播放            → ✅ 单码流 DirectStream + HLS 转码均可用
+第三阶段（P0）：视频播放            → ✅ DirectStream + HLS 转码均可用
 第四阶段（P1）：播放状态同步        → ✅ 进度和已观看状态回传
-第五阶段（P2）：增强功能            → ❌ 搜索、继续观看、收藏等
+第五阶段（P2）：增强功能            → ✅ 搜索、继续观看、收藏等（部分完成）
+```
+
+## 测试覆盖
+
+完整的 API 测试套件位于 `bridge-test/`，覆盖 112 个测试用例：
+
+- System API：系统信息、Ping、路径大小写兼容
+- Auth & Users API：登录、用户信息、令牌验证
+- Branding API：品牌配置
+- UserViews API：媒体库列表
+- Items API：媒体列表、详情、搜索、过滤、排序
+- Shows API：季、集列表
+- Images API：图片代理、缓存
+- Stream API：PlaybackInfo、DirectStream、HLS、字幕
+- Playback API：播放状态同步
+- Resume API：继续观看
+- Favorites API：收藏功能
+- Misc API：其他端点
+
+运行测试：
+```bash
+cd bridge-test && npm test
 ```

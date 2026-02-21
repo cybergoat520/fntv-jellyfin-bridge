@@ -26,6 +26,10 @@ pub fn router() -> Router<BridgeConfig> {
             get(items_list).layer(axum::middleware::from_fn(require_auth)),
         )
         .route(
+            "/Items/Filters",
+            get(items_filters).layer(axum::middleware::from_fn(require_auth)),
+        )
+        .route(
             "/Items/Latest",
             get(items_latest).layer(axum::middleware::from_fn(require_auth)),
         )
@@ -545,4 +549,67 @@ async fn build_item_response(
     }
 
     Json(dto)
+}
+
+/// GET /Items/Filters - 返回过滤器选项
+async fn items_filters(
+    State(config): State<BridgeConfig>,
+    req: axum::extract::Request,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    use axum::http::StatusCode;
+
+    let session = match req.extensions().get::<SessionData>() {
+        Some(s) => s.clone(),
+        None => return (StatusCode::UNAUTHORIZED, Json(json!({"error":"Unauthorized"}))).into_response(),
+    };
+
+    // 获取所有项目来提取过滤器选项
+    let result = cached_get_item_list(
+        &session.fnos_server,
+        &session.fnos_token,
+        "",
+        "sort_title",
+        "ASC",
+        &config,
+    )
+    .await;
+
+    if !result.success || result.data.is_none() {
+        return Json(json!({
+            "Genres": [],
+            "Tags": [],
+            "Years": [],
+        })).into_response();
+    }
+
+    let list_data = result.data.unwrap();
+    
+    // 提取唯一的年份（从 air_date 解析）
+    let mut years: std::collections::HashSet<i32> = std::collections::HashSet::new();
+    
+    for item in &list_data.list {
+        // 从 air_date 字段提取年份 (格式: "2023-01-15")
+        if !item.air_date.is_empty() {
+            if let Some(year_str) = item.air_date.split('-').next() {
+                if let Ok(year) = year_str.parse::<i32>() {
+                    if year > 1900 && year < 2100 {
+                        years.insert(year);
+                    }
+                }
+            }
+        }
+    }
+
+    let years_vec: Vec<i32> = {
+        let mut v: Vec<i32> = years.into_iter().collect();
+        v.sort_unstable_by(|a, b| b.cmp(a)); // 降序排列
+        v
+    };
+
+    Json(json!({
+        "Genres": [], // 飞牛 API 不返回流派信息
+        "Tags": [],   // 飞牛没有标签概念
+        "Years": years_vec,
+    })).into_response()
 }

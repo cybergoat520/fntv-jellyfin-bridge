@@ -2,4 +2,5 @@
 rust = "latest"
 
 [env]
-RUST_LOG = "info,fnos_bridge::mappers::media=debug"
+RUST_LOG = "info"
+FNOS_SERVER = "http://192.168.9.5:5666"

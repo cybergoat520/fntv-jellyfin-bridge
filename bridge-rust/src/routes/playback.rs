@@ -30,6 +30,10 @@ pub fn router() -> Router<BridgeConfig> {
             "/Sessions/Playing/Stopped",
             post(playing_stopped).layer(axum::middleware::from_fn(require_auth)),
         )
+        .route(
+            "/Sessions/Playing/Ping",
+            post(playing_ping).layer(axum::middleware::from_fn(require_auth)),
+        )
 }
 
 async fn playing_start(
@@ -54,6 +58,10 @@ async fn playing_stopped(
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
     handle_play_report(&config, req, "stopped").await.into_response()
+}
+
+async fn playing_ping() -> axum::http::StatusCode {
+    axum::http::StatusCode::NO_CONTENT
 }
 
 async fn handle_play_report(

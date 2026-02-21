@@ -179,39 +179,145 @@ describe('Stream API', () => {
 
   describe('GET /Videos/:itemId/stream.container', () => {
     skipIfNoCredentials(() => {
-      it('应该支持带扩展名的流请求', async () => {
-        if (!testItemId) {
-          console.log('  [SKIP] 未找到测试项目');
+      it('应该支持带扩展名的流请求（Range: 头部 16KB）', async () => {
+        if (!testItemId || !testMediaSourceId) {
+          console.log('  [SKIP] 未找到测试项目或媒体源');
           return;
         }
 
-        const response = await get(`/Videos/${testItemId}/stream.mkv?static=true`);
+        const response = await get(`/Videos/${testItemId}/stream.mkv?static=true&MediaSourceId=${testMediaSourceId}`, {
+          headers: { 'Range': 'bytes=0-16383' },  // 前 16KB
+          responseType: 'arraybuffer',
+        });
         
-        // 应该能处理（可能重定向或返回流）
-        assert.ok([200, 206, 302, 404].includes(response.status), 
-          `期望 200/206/302/404，实际得到 ${response.status}`);
+        assert.ok([200, 206].includes(response.status), 
+          `期望 200/206，实际得到 ${response.status}`);
+        
+        if (response.data) {
+          const size = response.data.byteLength || response.data.length || 0;
+          console.log(`  ✓ 头部数据: ${size} bytes`);
+          assert.ok(size > 0, '应该返回数据');
+          assert.ok(size <= 16384, `数据大小应该 <= 16KB，实际 ${size}`);
+        }
+      });
+
+      it('应该支持 Range 请求（中间 16KB）', async () => {
+        if (!testItemId || !testMediaSourceId) {
+          console.log('  [SKIP] 未找到测试项目或媒体源');
+          return;
+        }
+
+        // 先获取文件大小
+        const headResp = await get(`/Videos/${testItemId}/stream.mkv?static=true&MediaSourceId=${testMediaSourceId}`, {
+          headers: { 'Range': 'bytes=0-0' },  // 只请求 1 byte 来获取 Content-Range
+        });
+        
+        // 从 Content-Range 解析总大小: "bytes 0-0/123456789"
+        let totalSize = 0;
+        if (headResp.status === 206) {
+          // axios 会把 headers 放在不同地方，尝试多种方式获取
+          const contentRange = headResp.data?.headers?.['content-range'] || '';
+          const match = contentRange.match(/\/(\d+)$/);
+          if (match) {
+            totalSize = parseInt(match[1], 10);
+          }
+        }
+        
+        if (totalSize < 100000) {
+          console.log('  [SKIP] 文件太小或无法获取大小，跳过中间位置测试');
+          return;
+        }
+
+        const midStart = Math.floor(totalSize / 2);
+        const midEnd = midStart + 16383;
+        
+        const response = await get(`/Videos/${testItemId}/stream.mkv?static=true&MediaSourceId=${testMediaSourceId}`, {
+          headers: { 'Range': `bytes=${midStart}-${midEnd}` },
+          responseType: 'arraybuffer',
+        });
+        
+        assert.ok([200, 206].includes(response.status), 
+          `期望 200/206，实际得到 ${response.status}`);
+        
+        if (response.data) {
+          const size = response.data.byteLength || response.data.length || 0;
+          console.log(`  ✓ 中间数据 (offset=${midStart}): ${size} bytes`);
+          assert.ok(size > 0, '应该返回数据');
+        }
+      });
+
+      it('应该支持 Range 请求（末尾 16KB）', async () => {
+        if (!testItemId || !testMediaSourceId) {
+          console.log('  [SKIP] 未找到测试项目或媒体源');
+          return;
+        }
+
+        // 使用 suffix-range 格式请求末尾数据
+        const response = await get(`/Videos/${testItemId}/stream.mkv?static=true&MediaSourceId=${testMediaSourceId}`, {
+          headers: { 'Range': 'bytes=-16384' },  // 末尾 16KB
+          responseType: 'arraybuffer',
+        });
+        
+        assert.ok([200, 206].includes(response.status), 
+          `期望 200/206，实际得到 ${response.status}`);
+        
+        if (response.data) {
+          const size = response.data.byteLength || response.data.length || 0;
+          console.log(`  ✓ 末尾数据: ${size} bytes`);
+          assert.ok(size > 0, '应该返回数据');
+        }
       });
     });
   });
 
   describe('HLS 转码流', () => {
     skipIfNoCredentials(() => {
-      it('应该返回 HLS 播放列表（如果不支持 DirectStream）', async () => {
+      it('无会话时应该返回 404 或 410', async () => {
+        // 使用一个不存在的 mediaSourceId，确保没有会话
+        const fakeMediaSourceId = '00000000-0000-0000-0000-000000000000';
+        const response = await get(`/${fakeMediaSourceId}/hls/main.m3u8`);
+        
+        // 无会话时应该返回 404（未找到）或 410（会话不存在/已过期）
+        assert.ok([404, 410].includes(response.status), 
+          `期望 404 或 410，实际得到 ${response.status}`);
+        console.log(`  ✓ 无会话时返回 ${response.status}`);
+      });
+
+      it('有会话时应该返回 HLS 播放列表', async () => {
         if (!testItemId || !testMediaSourceId) {
           console.log('  [SKIP] 未找到测试项目或媒体源');
           return;
         }
 
-        // 请求 HLS m3u8 播放列表
+        // 1. 先调用 PlaybackInfo 创建会话（注册流元数据）
+        const playbackInfoResponse = await post(`/Items/${testItemId}/PlaybackInfo`, {
+          DeviceProfile: {
+            MaxStreamingBitrate: 120000000,
+            TranscodingProfiles: [
+              { Type: 'Video', Container: 'ts', Protocol: 'hls' }
+            ]
+          }
+        });
+        
+        if (playbackInfoResponse.status !== 200) {
+          console.log('  [SKIP] PlaybackInfo 调用失败');
+          return;
+        }
+
+        // 2. 请求 HLS m3u8 播放列表
         const response = await get(`/${testMediaSourceId}/hls/main.m3u8`);
         
-        // 可能返回 200（播放列表）或 404（未启动转码）
-        assert.ok([200, 404].includes(response.status), 
-          `期望 200 或 404，实际得到 ${response.status}`);
-        
-        if (response.status === 200 && typeof response.data === 'string') {
+        // 有会话时应该返回 200（播放列表）
+        // 注意：如果飞牛服务器不支持转码或配置问题，可能仍返回 404/410
+        if (response.status === 200) {
+          assert.ok(typeof response.data === 'string', '应该返回字符串');
           assert.ok(response.data.includes('#EXTM3U'), '应该是有效的 m3u8 文件');
           console.log(`  ✓ HLS 播放列表已获取`);
+        } else {
+          // 如果不是 200，记录状态但不失败（可能是服务器配置问题）
+          console.log(`  ⚠ HLS 返回 ${response.status}（可能服务器不支持转码）`);
+          assert.ok([404, 410].includes(response.status),
+            `期望 200、404 或 410，实际得到 ${response.status}`);
         }
       });
     });

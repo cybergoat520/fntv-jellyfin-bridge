@@ -4,7 +4,7 @@
 use axum::{
     body::Body,
     extract::{Path, Query, State},
-    http::{header, StatusCode},
+    http::StatusCode,
     response::{IntoResponse, Response},
     routing::get,
     Router,
@@ -40,7 +40,18 @@ pub fn router() -> Router<BridgeConfig> {
             "/Videos/{itemId}/stream",
             get(video_stream).layer(axum::middleware::from_fn(require_auth)),
         )
+        .route(
+            "/Videos/{itemId}/stream/{ext}",
+            get(video_stream_with_ext).layer(axum::middleware::from_fn(require_auth)),
+        )
+        // HLS 播放列表 - 支持带和不带 /Videos 前缀
         .route("/Videos/{mediaGuid}/hls/{file}", get(hls_stream))
+        .route("/{mediaGuid}/hls/{file}", get(hls_stream))
+        // 字幕流
+        .route(
+            "/Videos/{itemId}/{mediaSourceId}/Subtitles/{index}/Stream/{format}",
+            get(subtitle_stream).layer(axum::middleware::from_fn(require_auth)),
+        )
 }
 
 #[derive(Deserialize, Default)]
@@ -54,21 +65,41 @@ struct StreamQuery {
     api_key2: Option<String>,
 }
 
+async fn video_stream_with_ext(
+    State(config): State<BridgeConfig>,
+    Path((item_id, _ext)): Path<(String, String)>,
+    Query(query): Query<StreamQuery>,
+    req: axum::extract::Request,
+) -> Response {
+    info!("[STREAM_EXT] 收到带扩展名的流请求: item_id={}, ext={}, uri={}", item_id, _ext, req.uri());
+    video_stream(State(config), Path(item_id), Query(query), req).await
+}
+
 async fn video_stream(
     State(config): State<BridgeConfig>,
     Path(item_id): Path<String>,
     Query(query): Query<StreamQuery>,
     req: axum::extract::Request,
 ) -> Response {
+    info!("[STREAM] ====== 开始处理视频流请求 ======");
+    
     let session = match req.extensions().get::<SessionData>() {
         Some(s) => s.clone(),
-        None => return StatusCode::UNAUTHORIZED.into_response(),
+        None => {
+            info!("[STREAM] ❌ 未找到 session，返回 401");
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
     };
+    info!("[STREAM] ✓ 获取 session 成功");
 
     let fnos_guid = match to_fnos_guid(&item_id) {
         Some(g) => g,
-        None => return StatusCode::NOT_FOUND.into_response(),
+        None => {
+            info!("[STREAM] ❌ 无法转换 item_id 到 fnos_guid: {}", item_id);
+            return StatusCode::NOT_FOUND.into_response();
+        }
     };
+    info!("[STREAM] ✓ fnos_guid={}", fnos_guid);
 
     let range_header = req.headers().get("range").and_then(|v| v.to_str().ok()).map(String::from);
 
@@ -79,17 +110,25 @@ async fn video_stream(
 
     // 优先使用 mediaSourceId
     let media_guid = if let Some(ref ms) = query.media_source_id {
+        info!("[STREAM] 使用传入的 media_source_id={}", ms);
         ms.clone()
     } else {
+        info!("[STREAM] 调用 fnos_get_play_info 获取 media_guid...");
         match fnos_get_play_info(&session.fnos_server, &session.fnos_token, &fnos_guid, &config).await {
-            r if r.success && r.data.is_some() => r.data.unwrap().media_guid,
-            _ => return StatusCode::NOT_FOUND.into_response(),
+            r if r.success && r.data.is_some() => {
+                let mg = r.data.unwrap().media_guid;
+                info!("[STREAM] ✓ 获取 media_guid={}", mg);
+                mg
+            }
+            r => {
+                info!("[STREAM] ❌ 获取 play_info 失败: success={}, has_data={}", r.success, r.data.is_some());
+                return StatusCode::NOT_FOUND.into_response();
+            }
         }
     };
 
-    info!("[VIDEO] 使用 mediaGuid={}", media_guid);
-
     // 获取流信息
+    info!("[STREAM] 调用 fnos_get_stream...");
     let stream_result = fnos_get_stream(
         &session.fnos_server,
         &session.fnos_token,
@@ -98,12 +137,15 @@ async fn video_stream(
         &config,
     )
     .await;
+    info!("[STREAM] ✓ fnos_get_stream 完成, success={}", stream_result.success);
 
     let (target_url, extra_headers, skip_verify) = build_upstream_target(
         &session, &media_guid, &stream_result, &config,
     );
+    info!("[STREAM] target_url={}, skip_verify={}", target_url, skip_verify);
 
     // 构建上游请求
+    info!("[STREAM] 构建上游请求...");
     let client = Client::builder()
         .danger_accept_invalid_certs(skip_verify || config.ignore_cert)
         .timeout(std::time::Duration::from_secs(120))
@@ -111,6 +153,7 @@ async fn video_stream(
         .unwrap_or_default();
 
     let mut upstream_req = client.get(&target_url);
+    info!("[STREAM] ✓ 上游请求构建完成，准备发送...");
 
     // 透传客户端头
     for h in PASSTHROUGH_HEADERS {
@@ -130,21 +173,52 @@ async fn video_stream(
         upstream_req = upstream_req.header("range", "bytes=0-");
     }
 
+    info!("[STREAM] 发送上游请求...");
     match upstream_req.send().await {
         Ok(resp) => {
             let status = resp.status().as_u16();
-            let mut builder = Response::builder();
+            info!("[STREAM] ✓ 上游响应: status={}", status);
+            
+            // 先决定是否做 206→200 转换
+            let (final_status, total_size) = if !client_had_range && status == 206 {
+                let total = resp.headers().get("content-range")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|cr| cr.rsplit('/').next())
+                    .and_then(|s| s.parse::<u64>().ok());
+                info!("[VIDEO] 206→200 转换, total_size={:?}", total);
+                (200, total)
+            } else {
+                (status, None)
+            };
+            
+            let mut builder = Response::builder().status(final_status);
 
             // CORS
             builder = builder
                 .header("access-control-allow-origin", "*")
                 .header("access-control-allow-headers", "*");
 
+            // 206→200 转换时，需要移除 transfer-encoding: chunked 并设置 content-length
+            let has_content_length = final_status == 200 && total_size.is_some();
+            
             // 转发响应头
             for h in FORWARD_HEADERS {
+                // 200 响应不应该有 content-range
+                if final_status == 200 && h.eq_ignore_ascii_case("content-range") {
+                    continue;
+                }
+                // 如果有 content-length，跳过 transfer-encoding: chunked
+                if has_content_length && h.eq_ignore_ascii_case("transfer-encoding") {
+                    continue;
+                }
                 if let Some(v) = resp.headers().get(*h) {
                     builder = builder.header(*h, v);
                 }
+            }
+            
+            // 206→200 转换时设置正确的 content-length
+            if has_content_length {
+                builder = builder.header("content-length", total_size.unwrap().to_string());
             }
 
             // MIME 类型修正
@@ -155,29 +229,15 @@ async fn video_stream(
                 builder = builder.header("content-type", "video/mp4");
             }
 
-            // 206→200 转换
-            let final_status = if !client_had_range && status == 206 {
-                if let Some(cr) = resp.headers().get("content-range").and_then(|v| v.to_str().ok()) {
-                    if let Some(total) = cr.rsplit('/').next().and_then(|s| s.parse::<u64>().ok()) {
-                        builder = builder.header("content-length", total.to_string());
-                    }
-                }
-                info!("[VIDEO] 206→200 转换");
-                200
-            } else {
-                status
-            };
-
-            builder = builder.status(final_status);
-
             // 流式传输 body
+            info!("[STREAM] 构建响应 body...");
             let stream = resp.bytes_stream();
             let body = Body::from_stream(stream);
-
+            info!("[STREAM] ====== 请求处理完成，返回 {} ======", final_status);
             builder.body(body).unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
         }
         Err(e) => {
-            error!("[VIDEO] 代理请求失败: {}", e);
+            error!("[STREAM] ❌ 代理请求失败: {}", e);
             StatusCode::BAD_GATEWAY.into_response()
         }
     }
@@ -215,8 +275,8 @@ async fn hls_stream(
     let (session_guid, _play_link) = match hls_session {
         Some(s) => s,
         None => {
-            error!("[HLS] 无法获取转码会话: mediaGuid={}", media_guid);
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            info!("[HLS] 无转码会话: mediaGuid={}", media_guid);
+            return StatusCode::NOT_FOUND.into_response();
         }
     };
 
@@ -331,4 +391,77 @@ fn build_upstream_target(
     extra.push(("Authx".into(), generate_authx_string(&media_path, None)));
 
     (target_url, extra, skip_verify)
+}
+
+/// 字幕流处理
+async fn subtitle_stream(
+    Path((item_id, media_source_id, index, format)): Path<(String, String, i32, String)>,
+    req: axum::extract::Request,
+) -> Response {
+    use crate::mappers::media::get_subtitle_info;
+    
+    let session = match req.extensions().get::<SessionData>() {
+        Some(s) => s.clone(),
+        None => return StatusCode::UNAUTHORIZED.into_response(),
+    };
+
+    info!(
+        "[SUBTITLE] 字幕请求: itemId={}, mediaSourceId={}, index={}, format={}",
+        item_id, media_source_id, index, format
+    );
+
+    // 从缓存获取字幕信息
+    if let Some(sub_info) = get_subtitle_info(&media_source_id, index) {
+        if !sub_info.guid.is_empty() {
+            // 构建飞牛字幕 URL
+            let subtitle_path = format!("/v/api/v1/media/subtitle?guid={}", sub_info.guid);
+            let target_url = format!("{}{}", session.fnos_server, subtitle_path);
+            let authx = generate_authx_string(&subtitle_path, None);
+
+            let client = Client::builder()
+                .danger_accept_invalid_certs(true)
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_default();
+
+            let upstream_req = client
+                .get(&target_url)
+                .header("Authorization", &session.fnos_token)
+                .header("Cookie", "mode=relay")
+                .header("Authx", &authx);
+
+            match upstream_req.send().await {
+                Ok(resp) => {
+                    let status = resp.status().as_u16();
+                    if status == 200 {
+                        let content_type = if format == "vtt" || format == "webvtt" {
+                            "text/vtt"
+                        } else {
+                            "application/octet-stream"
+                        };
+                        
+                        match resp.bytes().await {
+                            Ok(body) => {
+                                return Response::builder()
+                                    .status(200)
+                                    .header("content-type", content_type)
+                                    .header("access-control-allow-origin", "*")
+                                    .body(Body::from(body))
+                                    .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+                            }
+                            Err(e) => {
+                                error!("[SUBTITLE] 读取字幕内容失败: {}", e);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("[SUBTITLE] 代理字幕请求失败: {}", e);
+                }
+            }
+        }
+    }
+
+    // 未找到字幕，返回 404
+    StatusCode::NOT_FOUND.into_response()
 }

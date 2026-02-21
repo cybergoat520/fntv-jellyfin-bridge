@@ -109,7 +109,7 @@ fn build_router(config: BridgeConfig) -> Router {
         .route("/Users/{userId}/Views", get(redirect_user_views))
         // 根路径
         .route("/", head(root_head).get(root_get))
-        .route("/web", get(|| async { Redirect::to("/web/") }))
+        .route("/web", get(web_redirect_or_index))
         .nest_service("/web/", ServeDir::new("web"))
         .route("/favicon.ico", get(no_content))
         // 兜底
@@ -218,8 +218,33 @@ async fn root_head() -> StatusCode {
     StatusCode::OK
 }
 
-async fn root_get() -> Redirect {
-    Redirect::to("/web/")
+async fn root_get() -> Response {
+    // 如果 web 目录存在，重定向到 /web/，否则返回简单页面
+    let web_dir = std::path::Path::new("web");
+    if web_dir.exists() {
+        Redirect::to("/web/").into_response()
+    } else {
+        Response::builder()
+            .header("content-type", "text/html; charset=utf-8")
+            .body(Body::from(
+                "<!DOCTYPE html><html><head><title>fnos-bridge</title></head><body>\
+                <h1>fnos-bridge</h1>\
+                <p>Jellyfin Web UI 未安装。</p>\
+                <p>使用原生客户端（Findroid / Swiftfin / Jellyfin Media Player）连接。</p>\
+                </body></html>",
+            ))
+            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+    }
+}
+
+async fn web_redirect_or_index() -> Response {
+    // 如果 web 目录存在，重定向到 /web/，否则返回根页面
+    let web_dir = std::path::Path::new("web");
+    if web_dir.exists() {
+        Redirect::to("/web/").into_response()
+    } else {
+        root_get().await
+    }
 }
 
 async fn web_index() -> Response {
@@ -352,19 +377,26 @@ fn normalize_path(req: axum::extract::Request) -> axum::extract::Request {
     let mut changed = false;
     let new_segments: Vec<String> = segments
         .iter()
-        .map(|seg| {
+        .flat_map(|seg| {
             let lower = seg.to_lowercase();
-            if lower.starts_with("stream.") && !path.to_lowercase().contains("subtitles") {
+            
+            // 检测 stream.ext 或 Stream.ext 格式（如 stream.mkv, Stream.vtt）
+            // 转换为 stream/ext 或 Stream/ext 格式
+            if lower.starts_with("stream.") && lower.len() > 7 {
+                let ext = &seg[7..]; // 取 "stream." 之后的部分
+                let prefix = if seg.starts_with('S') { "Stream" } else { "stream" };
                 changed = true;
-                return "stream".to_string();
+                return vec![prefix.to_string(), ext.to_string()];
             }
+            
+            // 正常的大小写规范化
             if let Some(canonical) = path_map.get(lower.as_str()) {
                 if *seg != *canonical {
                     changed = true;
-                    return canonical.to_string();
+                    return vec![canonical.to_string()];
                 }
             }
-            seg.to_string()
+            vec![seg.to_string()]
         })
         .collect();
 

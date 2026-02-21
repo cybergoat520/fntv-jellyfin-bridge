@@ -46,6 +46,10 @@ struct EpisodesQuery {
     season: Option<i32>,
     #[serde(rename = "UserId")]
     user_id: Option<String>,
+    #[serde(rename = "StartIndex")]
+    start_index: Option<i64>,
+    #[serde(rename = "Limit")]
+    limit: Option<i64>,
 }
 
 async fn seasons(
@@ -166,7 +170,19 @@ async fn episodes(
     }
 
     let episodes = result.data.unwrap();
-    let items: Vec<BaseItemDto> = episodes
+    let total = episodes.len() as i64;
+    
+    // 应用分页
+    let start = query.start_index.unwrap_or(0) as usize;
+    let limit = query.limit.unwrap_or(total as i64) as usize;
+    
+    let paged_episodes: Vec<_> = if start < episodes.len() {
+        episodes[start..episodes.len().min(start + limit)].to_vec()
+    } else {
+        vec![]
+    };
+    
+    let items: Vec<BaseItemDto> = paged_episodes
         .iter()
         .map(|ep| {
             let mut dto = map_playlist_item_to_dto(ep, &server_id, &session.fnos_server, &session.fnos_token);
@@ -177,8 +193,11 @@ async fn episodes(
         })
         .collect();
 
-    let total = items.len() as i64;
-    Json(ItemsResult { items, total_record_count: total, start_index: 0 }).into_response()
+    Json(ItemsResult { 
+        items, 
+        total_record_count: total, 
+        start_index: start as i64 
+    }).into_response()
 }
 
 async fn next_up() -> Json<ItemsResult> {

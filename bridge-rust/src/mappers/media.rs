@@ -41,6 +41,7 @@ fn map_video_stream(vs: &serde_json::Value, index: i32) -> serde_json::Value {
     let width = vs["width"].as_i64().unwrap_or(0);
 
     json!({
+        "Id": format!("{}", index),
         "Codec": codec,
         "IsInterlaced": !vs["progressive"].as_bool().unwrap_or(true),
         "BitRate": vs["bps"].as_i64(),
@@ -73,6 +74,7 @@ fn map_audio_stream(audio: &serde_json::Value, index: i32) -> serde_json::Value 
         || audio["is_default"].as_bool().unwrap_or(false);
 
     json!({
+        "Id": format!("{}", index),
         "Codec": codec,
         "Language": audio["language"].as_str(),
         "IsInterlaced": false,
@@ -111,6 +113,7 @@ fn map_subtitle_stream(ss: &serde_json::Value, index: i32) -> serde_json::Value 
     };
 
     json!({
+        "Id": format!("{}", index),
         "Codec": codec,
         "Language": if language.is_empty() { serde_json::Value::Null } else { json!(language) },
         "IsInterlaced": false,
