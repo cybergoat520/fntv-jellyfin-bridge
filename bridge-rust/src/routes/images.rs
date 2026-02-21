@@ -1,110 +1,150 @@
 /// 图片代理路由
+/// 优先从 imageCache 获取图片路径，fallback 到 fnosGetPlayInfo
 
 use axum::{
     body::Body,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{header, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
     Extension, Router,
 };
+use std::collections::HashMap;
 
 use crate::config::BridgeConfig;
 use crate::fnos_client::signature::generate_authx_string;
 use crate::mappers::id::to_fnos_guid;
+use crate::middleware::auth::optional_auth;
 use crate::services::fnos::fnos_get_play_info;
+use crate::services::image_cache::{get_image_cache, set_image_cache, CachedImage};
 use crate::services::session::SessionData;
-use crate::middleware::auth::require_auth;
 
 pub fn router() -> Router<BridgeConfig> {
     Router::new()
         .route(
             "/Items/{itemId}/Images/{imageType}",
-            get(proxy_image).layer(axum::middleware::from_fn(require_auth)),
+            get(proxy_image).layer(axum::middleware::from_fn(optional_auth)),
         )
         .route(
             "/Items/{itemId}/Images/{imageType}/{index}",
-            get(proxy_image_indexed).layer(axum::middleware::from_fn(require_auth)),
+            get(proxy_image_indexed).layer(axum::middleware::from_fn(optional_auth)),
         )
 }
 
 async fn proxy_image(
     State(config): State<BridgeConfig>,
     Path((item_id, image_type)): Path<(String, String)>,
-    Extension(session): Extension<SessionData>,
+    Query(query): Query<HashMap<String, String>>,
+    session: Option<Extension<SessionData>>,
 ) -> Response {
-    do_proxy_image(&config, &item_id, &image_type, &session).await
+    do_proxy_image(&config, &item_id, &image_type, &query, session.map(|e| e.0)).await
 }
 
 async fn proxy_image_indexed(
     State(config): State<BridgeConfig>,
     Path((item_id, image_type, _index)): Path<(String, String, String)>,
-    Extension(session): Extension<SessionData>,
+    Query(query): Query<HashMap<String, String>>,
+    session: Option<Extension<SessionData>>,
 ) -> Response {
-    do_proxy_image(&config, &item_id, &image_type, &session).await
+    do_proxy_image(&config, &item_id, &image_type, &query, session.map(|e| e.0)).await
 }
 
 async fn do_proxy_image(
     config: &BridgeConfig,
     item_id: &str,
     image_type: &str,
-    session: &SessionData,
+    query: &HashMap<String, String>,
+    session: Option<SessionData>,
 ) -> Response {
+    // 1. 先查缓存
+    let mut cached = get_image_cache(item_id);
 
-    let fnos_guid = match to_fnos_guid(item_id) {
-        Some(g) => g,
+    // 2. 缓存未命中，尝试用 session 调 API
+    if cached.is_none() {
+        if let Some(ref session) = session {
+            if let Some(fnos_guid) = to_fnos_guid(item_id) {
+                let result = fnos_get_play_info(
+                    &session.fnos_server,
+                    &session.fnos_token,
+                    &fnos_guid,
+                    config,
+                )
+                .await;
+
+                if result.success {
+                    if let Some(ref data) = result.data {
+                        let img = CachedImage {
+                            poster: if data.item.posters.is_empty() { None } else { Some(data.item.posters.clone()) },
+                            backdrop: if data.item.still_path.is_empty() { None } else { Some(data.item.still_path.clone()) },
+                            server: session.fnos_server.clone(),
+                            token: session.fnos_token.clone(),
+                        };
+                        set_image_cache(item_id, img.clone());
+                        cached = Some(img);
+                    }
+                }
+            }
+        }
+    }
+
+    let cached = match cached {
+        Some(c) => c,
         None => return StatusCode::NOT_FOUND.into_response(),
     };
 
-    // 获取 play/info 来拿到图片 URL
-    let result = fnos_get_play_info(
-        &session.fnos_server,
-        &session.fnos_token,
-        &fnos_guid,
-        config,
-    )
-    .await;
-
-    if !result.success || result.data.is_none() {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-
-    let play_info = result.data.unwrap();
+    // 选择图片路径
     let image_path = match image_type.to_lowercase().as_str() {
-        "primary" => &play_info.item.posters,
-        "backdrop" => &play_info.item.still_path,
-        "thumb" => {
-            if !play_info.item.still_path.is_empty() {
-                &play_info.item.still_path
-            } else {
-                &play_info.item.posters
-            }
+        "primary" | "poster" => cached.poster.as_deref(),
+        "backdrop" | "thumb" | "banner" => {
+            cached.backdrop.as_deref().or(cached.poster.as_deref())
         }
-        _ => &play_info.item.posters,
+        _ => cached.poster.as_deref(),
     };
 
-    if image_path.is_empty() {
-        return StatusCode::NOT_FOUND.into_response();
-    }
+    let image_path = match image_path {
+        Some(p) if !p.is_empty() => p,
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    };
 
-    // 构建飞牛图片 URL
+    // 构造完整图片 URL
     let image_url = if image_path.starts_with("http") {
         image_path.to_string()
+    } else if image_path.starts_with("/v/api/") {
+        format!("{}{}", cached.server, image_path)
     } else {
-        format!("{}{}", session.fnos_server, image_path)
+        let clean = if image_path.starts_with('/') { image_path.to_string() } else { format!("/{}", image_path) };
+        format!("{}/v/api/v1/sys/img{}", cached.server, clean)
     };
 
-    let authx = generate_authx_string(image_path, None);
+    // 添加尺寸参数
+    let fill_width = query.get("fillWidth").or(query.get("maxWidth"));
+    let final_url = if let Some(w) = fill_width {
+        if !image_url.contains("w=") {
+            let sep = if image_url.contains('?') { "&" } else { "?" };
+            format!("{}{}w={}", image_url, sep, w)
+        } else {
+            image_url
+        }
+    } else {
+        image_url
+    };
 
-    // 代理请求
+    // 从 URL 提取 API 路径用于签名
+    let api_path = if let Ok(url) = reqwest::Url::parse(&final_url) {
+        url.path().to_string()
+    } else {
+        image_path.to_string()
+    };
+    let authx = generate_authx_string(&api_path, None);
+
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(config.ignore_cert)
         .build()
         .unwrap_or_default();
 
     let upstream = client
-        .get(&image_url)
-        .header("Authorization", &session.fnos_token)
+        .get(&final_url)
+        .header("Authorization", &cached.token)
         .header("Cookie", "mode=relay")
         .header("Authx", &authx)
         .send()

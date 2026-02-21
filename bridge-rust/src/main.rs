@@ -119,9 +119,12 @@ fn build_router(config: BridgeConfig) -> Router {
 
     // 路径规范化必须在路由匹配之前，用外层 Router 包裹
     Router::new()
-        .fallback(any(move |req: axum::extract::Request| async move {
-            let normalized = normalize_path(req);
-            inner.oneshot(normalized).await.into_response()
+        .fallback(any(move |req: axum::extract::Request| {
+            let router = inner.clone();
+            async move {
+                let normalized = normalize_path(req);
+                router.oneshot(normalized).await.into_response()
+            }
         }))
 }
 

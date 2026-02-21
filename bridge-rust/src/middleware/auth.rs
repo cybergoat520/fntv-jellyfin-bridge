@@ -145,3 +145,19 @@ pub async fn require_auth(mut req: Request, next: Next) -> Response {
 
     next.run(req).await
 }
+
+/// 可选认证中间件 — 有 token 就注入 session，没有也放行
+pub async fn optional_auth(mut req: Request, next: Next) -> Response {
+    let (token, parsed) = extract_token(&req);
+
+    if let Some(t) = token {
+        if let Some(session) = get_session(&t) {
+            req.extensions_mut().insert(session);
+        }
+    }
+    if let Some(p) = parsed {
+        req.extensions_mut().insert(p);
+    }
+
+    next.run(req).await
+}

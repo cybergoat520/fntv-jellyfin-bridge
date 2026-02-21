@@ -4,6 +4,7 @@
 use base64::Engine;
 use crate::types::fnos::{FnosPlayInfo, FnosPlayListItem};
 use crate::types::jellyfin::{BaseItemDto, UserItemDataDto};
+use crate::services::image_cache::{set_image_cache, CachedImage};
 use super::id::{to_jellyfin_id, register_item_type};
 
 /// 秒 → Jellyfin ticks (1 tick = 100ns)
@@ -17,7 +18,7 @@ pub fn ticks_to_seconds(ticks: i64) -> f64 {
 }
 
 /// 飞牛内容类型 → Jellyfin 类型
-fn map_type(fnos_type: &str) -> &'static str {
+pub fn map_type(fnos_type: &str) -> &'static str {
     match fnos_type {
         "Movie" => "Movie",
         "Episode" => "Episode",
@@ -48,7 +49,7 @@ fn make_image_tags(poster: &str) -> Option<serde_json::Value> {
 }
 
 /// 将飞牛 PlayListItem 映射为 Jellyfin BaseItemDto
-pub fn map_playlist_item_to_dto(item: &FnosPlayListItem, server_id: &str) -> BaseItemDto {
+pub fn map_playlist_item_to_dto(item: &FnosPlayListItem, server_id: &str, server: &str, token: &str) -> BaseItemDto {
     let jf_type = map_type(&item.item_type);
     let is_folder = matches!(jf_type, "Series" | "Season" | "Folder");
     let duration = if item.duration > 0.0 {
@@ -60,6 +61,17 @@ pub fn map_playlist_item_to_dto(item: &FnosPlayListItem, server_id: &str) -> Bas
     };
 
     register_item_type(&item.guid, &item.item_type);
+
+    // 缓存图片路径
+    let jf_id = to_jellyfin_id(&item.guid);
+    if !item.poster.is_empty() {
+        set_image_cache(&jf_id, CachedImage {
+            poster: Some(item.poster.clone()),
+            backdrop: None,
+            server: server.to_string(),
+            token: token.to_string(),
+        });
+    }
 
     let mut dto = BaseItemDto {
         name: if !item.title.is_empty() {
@@ -140,7 +152,7 @@ pub fn map_playlist_item_to_dto(item: &FnosPlayListItem, server_id: &str) -> Bas
 }
 
 /// 将飞牛 PlayInfo 映射为 Jellyfin BaseItemDto
-pub fn map_play_info_to_dto(info: &FnosPlayInfo, server_id: &str) -> BaseItemDto {
+pub fn map_play_info_to_dto(info: &FnosPlayInfo, server_id: &str, server: &str, token: &str) -> BaseItemDto {
     let item = &info.item;
     let jf_type = map_type(&item.item_type);
     let is_folder = matches!(jf_type, "Series" | "Season");
@@ -151,6 +163,17 @@ pub fn map_play_info_to_dto(info: &FnosPlayInfo, server_id: &str) -> BaseItemDto
     } else {
         0.0
     };
+
+    // 缓存图片路径
+    let jf_id = to_jellyfin_id(&item.guid);
+    if !item.posters.is_empty() || !item.still_path.is_empty() {
+        set_image_cache(&jf_id, CachedImage {
+            poster: if item.posters.is_empty() { None } else { Some(item.posters.clone()) },
+            backdrop: if item.still_path.is_empty() { None } else { Some(item.still_path.clone()) },
+            server: server.to_string(),
+            token: token.to_string(),
+        });
+    }
 
     let mut dto = BaseItemDto {
         name: if !item.title.is_empty() {

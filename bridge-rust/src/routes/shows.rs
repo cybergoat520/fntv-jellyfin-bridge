@@ -85,7 +85,7 @@ async fn seasons(
         .iter()
         .map(|s| {
             register_item_type(&s.guid, "Season");
-            let mut dto = map_playlist_item_to_dto(s, &server_id);
+            let mut dto = map_playlist_item_to_dto(s, &server_id, &session.fnos_server, &session.fnos_token);
             dto.item_type = "Season".into();
             dto.index_number = Some(s.season_number);
             dto.series_id = Some(to_jellyfin_id(&fnos_guid));
@@ -169,7 +169,7 @@ async fn episodes(
     let items: Vec<BaseItemDto> = episodes
         .iter()
         .map(|ep| {
-            let mut dto = map_playlist_item_to_dto(ep, &server_id);
+            let mut dto = map_playlist_item_to_dto(ep, &server_id, &session.fnos_server, &session.fnos_token);
             dto.series_id = Some(to_jellyfin_id(
                 &to_fnos_guid(&series_id).unwrap_or_default(),
             ));

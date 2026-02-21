@@ -7,6 +7,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::json;
+use tracing::{info, warn};
 
 use crate::config::BridgeConfig;
 use crate::mappers::id::*;
@@ -14,6 +15,7 @@ use crate::mappers::item::*;
 use crate::mappers::media::build_media_sources;
 use crate::middleware::auth::require_auth;
 use crate::services::fnos::*;
+use crate::services::item_list_cache::cached_get_item_list;
 use crate::services::session::SessionData;
 use crate::types::jellyfin::{BaseItemDto, ItemsResult};
 
@@ -37,7 +39,15 @@ pub fn router() -> Router<BridgeConfig> {
             get(items_list).layer(axum::middleware::from_fn(require_auth)),
         )
         .route(
+            "/Users/{userId}/Items/Latest",
+            get(items_latest).layer(axum::middleware::from_fn(require_auth)),
+        )
+        .route(
             "/Users/{userId}/Items/Resume",
+            get(items_resume).layer(axum::middleware::from_fn(require_auth)),
+        )
+        .route(
+            "/UserItems/Resume",
             get(items_resume).layer(axum::middleware::from_fn(require_auth)),
         )
         .route(
@@ -48,24 +58,26 @@ pub fn router() -> Router<BridgeConfig> {
 
 #[derive(Deserialize, Default)]
 struct ItemsQuery {
-    #[serde(rename = "ParentId")]
+    #[serde(alias = "ParentId", alias = "parentId")]
     parent_id: Option<String>,
-    #[serde(rename = "IncludeItemTypes")]
+    #[serde(alias = "IncludeItemTypes", alias = "includeItemTypes")]
     include_item_types: Option<String>,
-    #[serde(rename = "SearchTerm")]
+    #[serde(alias = "SearchTerm", alias = "searchTerm")]
     search_term: Option<String>,
-    #[serde(rename = "SortBy")]
+    #[serde(alias = "SortBy", alias = "sortBy")]
     sort_by: Option<String>,
-    #[serde(rename = "SortOrder")]
+    #[serde(alias = "SortOrder", alias = "sortOrder")]
     sort_order: Option<String>,
-    #[serde(rename = "Filters")]
+    #[serde(alias = "Filters", alias = "filters")]
     filters: Option<String>,
-    #[serde(rename = "StartIndex")]
+    #[serde(alias = "StartIndex", alias = "startIndex")]
     start_index: Option<i64>,
-    #[serde(rename = "Limit")]
+    #[serde(alias = "Limit", alias = "limit")]
     limit: Option<i64>,
-    #[serde(rename = "Recursive")]
+    #[serde(alias = "Recursive", alias = "recursive")]
     recursive: Option<String>,
+    #[serde(alias = "MediaTypes", alias = "mediaTypes")]
+    media_types: Option<String>,
 }
 
 async fn items_list(
@@ -80,113 +92,193 @@ async fn items_list(
         None => return (axum::http::StatusCode::UNAUTHORIZED, Json(json!({"error":"Unauthorized"}))).into_response(),
     };
 
+    info!("[ITEMS] 请求 URI: {}", req.uri());
+
     let server_id = generate_server_id(&config.fnos_server);
-
-    // 确定 parent_guid
-    let parent_id = query.parent_id.unwrap_or_default();
-    let fnos_parent = if parent_id.is_empty() {
-        String::new()
-    } else {
-        to_fnos_guid(&parent_id).unwrap_or_default()
-    };
-
-    // 处理虚拟媒体库
-    let category = if fnos_parent == "view_movies" {
-        "Movie"
-    } else if fnos_parent == "view_tvshows" {
-        "TV"
-    } else if fnos_parent.starts_with("view_") {
-        ""
-    } else {
-        // 从 IncludeItemTypes 推断
-        match query.include_item_types.as_deref() {
-            Some(t) if t.contains("Movie") => "Movie",
-            Some(t) if t.contains("Series") => "TV",
-            _ => "",
-        }
-    };
+    let filters = query.filters.as_deref().unwrap_or("");
+    let include_item_types = query.include_item_types.as_deref().unwrap_or("");
 
     // 排序
     let sort_column = match query.sort_by.as_deref() {
-        Some(s) if s.contains("DateCreated") => "ts",
+        Some(s) if s.contains("DateCreated") || s.contains("DatePlayed") => "air_date",
         Some(s) if s.contains("CommunityRating") => "vote_average",
-        _ => "title",
+        Some(s) if s.contains("SortName") || s.contains("Name") => "sort_title",
+        _ => "sort_title",
     };
     let sort_type = match query.sort_order.as_deref() {
-        Some("Descending") => "desc",
-        _ => "asc",
+        Some("Descending") => "DESC",
+        _ => "ASC",
     };
 
-    // 收藏过滤
-    let is_favorite = query.filters.as_deref().map_or(false, |f| f.contains("IsFavorite"));
+    let parent_id = query.parent_id.as_deref().unwrap_or("");
 
-    // 构建请求
-    let parent_guid = if fnos_parent.starts_with("view_") || fnos_parent.is_empty() {
-        String::new()
-    } else {
-        fnos_parent
-    };
+    // ===== 分支 1: 有 ParentId =====
+    if !parent_id.is_empty() {
+        let fnos_parent = to_fnos_guid(parent_id).unwrap_or_default();
+        let is_virtual_view = fnos_parent.starts_with("view_");
 
-    let result = fnos_get_item_list(
-        &session.fnos_server,
-        &session.fnos_token,
-        &parent_guid,
-        sort_column,
-        sort_type,
-        &config,
-    )
-    .await;
+        // 虚拟媒体库过滤类型
+        let view_filter = if fnos_parent == "view_movies" {
+            "Movie"
+        } else if fnos_parent == "view_tvshows" {
+            "Series"
+        } else {
+            ""
+        };
 
-    if !result.success || result.data.is_none() {
-        return Json(ItemsResult {
-            items: vec![],
-            total_record_count: 0,
-            start_index: 0,
-        }).into_response();
+        let parent_guid = if is_virtual_view { "" } else { &fnos_parent };
+
+        info!("[ITEMS] 分支1: parent_id={}, fnos_parent={}, is_virtual_view={}, view_filter={}", parent_id, fnos_parent, is_virtual_view, view_filter);
+
+        let result = cached_get_item_list(
+            &session.fnos_server,
+            &session.fnos_token,
+            parent_guid,
+            sort_column,
+            sort_type,
+            &config,
+        )
+        .await;
+
+        if !result.success || result.data.is_none() {
+            return Json(ItemsResult { items: vec![], total_record_count: 0, start_index: 0 }).into_response();
+        }
+
+        let list_data = result.data.unwrap();
+        info!("[ITEMS] 飞牛返回 {} 条", list_data.list.len());
+
+        let mut filtered: Vec<_> = list_data.list.iter().collect();
+
+        // 虚拟媒体库类型过滤
+        if !view_filter.is_empty() {
+            filtered.retain(|item| map_type(&item.item_type) == view_filter);
+        }
+
+        // IncludeItemTypes 过滤
+        if !include_item_types.is_empty() {
+            let types: Vec<&str> = include_item_types.split(',').map(|t| t.trim()).collect();
+            filtered.retain(|item| types.contains(&map_type(&item.item_type)));
+        }
+
+        // 搜索过滤
+        if let Some(ref term) = query.search_term {
+            let lower = term.to_lowercase();
+            filtered.retain(|item| {
+                item.title.to_lowercase().contains(&lower) || item.tv_title.to_lowercase().contains(&lower)
+            });
+        }
+
+        // IsFavorite
+        if filters.contains("IsFavorite") {
+            filtered.retain(|item| item.is_favorite == 1);
+        }
+
+        // IsResumable
+        if filters.contains("IsResumable") {
+            filtered.retain(|item| item.ts > 0.0 && item.watched != 1);
+        }
+
+        // IsPlayed / IsUnplayed
+        if filters.contains("IsPlayed") {
+            filtered.retain(|item| item.watched == 1);
+        }
+        if filters.contains("IsUnplayed") {
+            filtered.retain(|item| item.watched != 1);
+        }
+
+        let all_dtos: Vec<BaseItemDto> = filtered.iter()
+            .map(|item| map_playlist_item_to_dto(item, &server_id, &session.fnos_server, &session.fnos_token))
+            .collect();
+
+        info!("[ITEMS] 过滤后 {} 条", all_dtos.len());
+
+        let total = all_dtos.len() as i64;
+        let start = query.start_index.unwrap_or(0) as usize;
+        let limit = query.limit.unwrap_or(50) as usize;
+        let paged = if start < all_dtos.len() {
+            all_dtos[start..all_dtos.len().min(start + limit)].to_vec()
+        } else {
+            vec![]
+        };
+
+        return Json(ItemsResult { items: paged, total_record_count: total, start_index: start as i64 }).into_response();
     }
 
-    let list_data = result.data.unwrap();
-    let mut items: Vec<BaseItemDto> = list_data
-        .list
-        .iter()
-        .filter(|item| {
-            // 类型过滤
-            if !category.is_empty() && item.item_type != category {
-                return false;
-            }
-            // 收藏过滤
-            if is_favorite && item.is_favorite != 1 {
-                return false;
-            }
-            // 搜索过滤
-            if let Some(ref term) = query.search_term {
-                let lower = term.to_lowercase();
-                let title_match = item.title.to_lowercase().contains(&lower);
-                let tv_match = item.tv_title.to_lowercase().contains(&lower);
-                if !title_match && !tv_match {
-                    return false;
-                }
-            }
-            true
-        })
-        .map(|item| map_playlist_item_to_dto(item, &server_id))
-        .collect();
+    // ===== 分支 2: 无 ParentId + Recursive（全局搜索/收藏夹等） =====
+    let recursive = query.recursive.as_deref() == Some("true");
+    if recursive && (!filters.is_empty() || query.search_term.is_some() || !include_item_types.is_empty()) {
+        info!("[ITEMS] 分支2: recursive, filters={}, include_item_types={}", filters, include_item_types);
 
-    let total = items.len() as i64;
-    let start = query.start_index.unwrap_or(0) as usize;
-    let limit = query.limit.unwrap_or(total) as usize;
+        let result = cached_get_item_list(
+            &session.fnos_server,
+            &session.fnos_token,
+            "",
+            sort_column,
+            sort_type,
+            &config,
+        )
+        .await;
 
-    if start < items.len() {
-        items = items[start..items.len().min(start + limit)].to_vec();
-    } else {
-        items.clear();
+        if !result.success || result.data.is_none() {
+            return Json(ItemsResult { items: vec![], total_record_count: 0, start_index: 0 }).into_response();
+        }
+
+        let list_data = result.data.unwrap();
+        let mut filtered: Vec<_> = list_data.list.iter().collect();
+
+        // 搜索过滤
+        if let Some(ref term) = query.search_term {
+            let lower = term.to_lowercase();
+            filtered.retain(|item| {
+                item.title.to_lowercase().contains(&lower) || item.tv_title.to_lowercase().contains(&lower)
+            });
+        }
+
+        // IncludeItemTypes 过滤
+        if !include_item_types.is_empty() {
+            let types: Vec<&str> = include_item_types.split(',').map(|t| t.trim()).collect();
+            filtered.retain(|item| types.contains(&map_type(&item.item_type)));
+        }
+
+        // IsFavorite
+        if filters.contains("IsFavorite") {
+            filtered.retain(|item| item.is_favorite == 1);
+        }
+
+        // IsResumable
+        if filters.contains("IsResumable") {
+            filtered.retain(|item| item.ts > 0.0 && item.watched != 1);
+        }
+
+        // IsPlayed / IsUnplayed
+        if filters.contains("IsPlayed") {
+            filtered.retain(|item| item.watched == 1);
+        }
+        if filters.contains("IsUnplayed") {
+            filtered.retain(|item| item.watched != 1);
+        }
+
+        let all_dtos: Vec<BaseItemDto> = filtered.iter()
+            .map(|item| map_playlist_item_to_dto(item, &server_id, &session.fnos_server, &session.fnos_token))
+            .collect();
+
+        info!("[ITEMS] 过滤后 {} 条", all_dtos.len());
+
+        let total = all_dtos.len() as i64;
+        let start = query.start_index.unwrap_or(0) as usize;
+        let limit = query.limit.unwrap_or(50) as usize;
+        let paged = if start < all_dtos.len() {
+            all_dtos[start..all_dtos.len().min(start + limit)].to_vec()
+        } else {
+            vec![]
+        };
+
+        return Json(ItemsResult { items: paged, total_record_count: total, start_index: start as i64 }).into_response();
     }
 
-    Json(ItemsResult {
-        items,
-        total_record_count: total,
-        start_index: start as i64,
-    }).into_response()
+    // ===== 分支 3: 无 ParentId 也无 Recursive，返回空 =====
+    info!("[ITEMS] 分支3: 无 ParentId 无 Recursive，返回空");
+    Json(ItemsResult { items: vec![], total_record_count: 0, start_index: 0 }).into_response()
 }
 
 async fn items_latest(
@@ -196,6 +288,8 @@ async fn items_latest(
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
 
+    info!("[LATEST] 请求 URI: {}", req.uri());
+
     let session = match req.extensions().get::<SessionData>() {
         Some(s) => s.clone(),
         None => return (axum::http::StatusCode::UNAUTHORIZED, Json(json!({"error":"Unauthorized"}))).into_response(),
@@ -203,29 +297,58 @@ async fn items_latest(
 
     let server_id = generate_server_id(&config.fnos_server);
 
-    let result = fnos_get_item_list(
+    let result = cached_get_item_list(
         &session.fnos_server,
         &session.fnos_token,
         "",
-        "ts",
-        "desc",
+        "air_date",
+        "DESC",
         &config,
     )
     .await;
 
     if !result.success || result.data.is_none() {
+        info!("[LATEST] 飞牛请求失败");
         return Json::<Vec<BaseItemDto>>(vec![]).into_response();
     }
 
     let list_data = result.data.unwrap();
-    let limit = query.limit.unwrap_or(20) as usize;
+    let limit = query.limit.unwrap_or(16) as usize;
 
-    let items: Vec<BaseItemDto> = list_data
-        .list
+    // 按 ParentId 过滤（虚拟媒体库）
+    let parent_id = query.parent_id.as_deref().unwrap_or("");
+    let view_filter = if !parent_id.is_empty() {
+        match to_fnos_guid(parent_id).as_deref() {
+            Some("view_movies") => "Movie",
+            Some("view_tvshows") => "Series",
+            _ => "",
+        }
+    } else {
+        ""
+    };
+
+    let include_item_types = query.include_item_types.as_deref().unwrap_or("");
+
+    let mut filtered: Vec<_> = list_data.list.iter().collect();
+
+    // 虚拟媒体库类型过滤
+    if !view_filter.is_empty() {
+        filtered.retain(|item| map_type(&item.item_type) == view_filter);
+    }
+
+    // IncludeItemTypes 过滤
+    if !include_item_types.is_empty() {
+        let types: Vec<&str> = include_item_types.split(',').map(|t| t.trim()).collect();
+        filtered.retain(|item| types.contains(&map_type(&item.item_type)));
+    }
+
+    let items: Vec<BaseItemDto> = filtered
         .iter()
         .take(limit)
-        .map(|item| map_playlist_item_to_dto(item, &server_id))
+        .map(|item| map_playlist_item_to_dto(item, &server_id, &session.fnos_server, &session.fnos_token))
         .collect();
+
+    info!("[LATEST] 飞牛返回 {} 条, view_filter={}, 过滤后 {} 条", list_data.list.len(), view_filter, items.len());
 
     Json(items).into_response()
 }
@@ -240,8 +363,10 @@ async fn items_detail(
 
     let session = match req.extensions().get::<SessionData>() {
         Some(s) => s.clone(),
-        None => return (StatusCode::UNAUTHORIZED, Json(json!({"error":"Unauthorized"}))).into_response(),
+        None => return (axum::http::StatusCode::UNAUTHORIZED, Json(json!({"error":"Unauthorized"}))).into_response(),
     };
+
+    info!("[ITEMS] 请求 URI: {}", req.uri());
 
     let server_id = generate_server_id(&config.fnos_server);
     let fnos_guid = to_fnos_guid(&item_id);
@@ -301,6 +426,14 @@ async fn items_resume(
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
 
+    info!("[RESUME] 请求 URI: {}", req.uri());
+
+    // 飞牛只有视频内容，音频和书籍返回空
+    let media_types = query.media_types.as_deref().unwrap_or("");
+    if !media_types.is_empty() && !media_types.contains("Video") {
+        return Json(ItemsResult { items: vec![], total_record_count: 0, start_index: 0 }).into_response();
+    }
+
     let session = match req.extensions().get::<SessionData>() {
         Some(s) => s.clone(),
         None => return (axum::http::StatusCode::UNAUTHORIZED, Json(json!({"error":"Unauthorized"}))).into_response(),
@@ -308,17 +441,18 @@ async fn items_resume(
 
     let server_id = generate_server_id(&config.fnos_server);
 
-    let result = fnos_get_item_list(
+    let result = cached_get_item_list(
         &session.fnos_server,
         &session.fnos_token,
         "",
-        "ts",
-        "desc",
+        "air_date",
+        "DESC",
         &config,
     )
     .await;
 
     if !result.success || result.data.is_none() {
+        info!("[RESUME] 飞牛请求失败: {:?}", result.message);
         return Json(ItemsResult { items: vec![], total_record_count: 0, start_index: 0 }).into_response();
     }
 
@@ -330,8 +464,10 @@ async fn items_resume(
         .iter()
         .filter(|item| item.ts > 0.0 && item.watched == 0)
         .take(limit)
-        .map(|item| map_playlist_item_to_dto(item, &server_id))
+        .map(|item| map_playlist_item_to_dto(item, &server_id, &session.fnos_server, &session.fnos_token))
         .collect();
+
+    info!("[RESUME] 飞牛返回 {} 条, 过滤后 {} 条", list_data.list.len(), items.len());
 
     let total = items.len() as i64;
     Json(ItemsResult { items, total_record_count: total, start_index: 0 }).into_response()
@@ -366,7 +502,7 @@ async fn build_item_response(
         play_info.item.guid = fnos_guid.to_string();
     }
 
-    let mut dto = map_play_info_to_dto(&play_info, server_id);
+    let mut dto = map_play_info_to_dto(&play_info, server_id, &session.fnos_server, &session.fnos_token);
 
     // 对可播放项目，获取流信息并附加 MediaSources
     if dto.media_type.as_deref() == Some("Video") && !play_info.media_guid.is_empty() {
