@@ -1,0 +1,28 @@
+{
+  "name": "fnos-bridge-test",
+  "version": "0.1.0",
+  "description": "fnos-bridge API 测试套件",
+  "type": "module",
+  "scripts": {
+    "test": "node --test --test-concurrency=1 tests/**/*.test.ts",
+    "test:parallel": "node --test tests/**/*.test.ts",
+    "test:system": "node --test tests/system.test.ts",
+    "test:auth": "node --test tests/auth.test.ts",
+    "test:views": "node --test tests/views.test.ts",
+    "test:items": "node --test tests/items.test.ts",
+    "test:shows": "node --test tests/shows.test.ts",
+    "test:playback": "node --test tests/playback.test.ts",
+    "test:stream": "node --test tests/stream.test.ts",
+    "test:images": "node --test tests/images.test.ts",
+    "test:branding": "node --test tests/branding.test.ts",
+    "test:favorites": "node --test tests/favorites.test.ts",
+    "test:resume": "node --test tests/resume.test.ts",
+    "test:misc": "node --test tests/misc.test.ts"
+  },
+  "dependencies": {
+    "axios": "^1.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.11"
+  }
+}
