@@ -4,7 +4,7 @@
 use reqwest::Client;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
+use tracing::{debug, warn};
 
 use super::signature::{generate_authx_string, generate_nonce};
 
@@ -117,7 +117,7 @@ impl FnosClient {
             let authx = generate_authx_string(url, body_str.as_deref());
             let full_url = format!("{}{}", base_url, url);
 
-            info!("[FNOS] {} {} (retries={})", method.to_uppercase(), full_url, retries_left);
+            debug!("[FNOS] {} {} (retries={})", method.to_uppercase(), full_url, retries_left);
 
             for attempt in 0..=retries_left {
                 let mut req_builder = match method {

@@ -7,6 +7,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::json;
+use tracing::{info, warn};
 
 use crate::config::BridgeConfig;
 use crate::mappers::id::{generate_server_id, to_jellyfin_id};
@@ -82,6 +83,7 @@ async fn authenticate_by_name(
     let (token, actual_server) = match fnos_login(&config, &body.username, &body.pw).await {
         Ok(r) => r,
         Err(e) => {
+            warn!("[AUTH] 登录失败: user={}, error={}", body.username, e);
             return (StatusCode::UNAUTHORIZED, Json(json!({"error": e}))).into_response();
         }
     };
@@ -102,6 +104,8 @@ async fn authenticate_by_name(
         ah.device.clone(),
         ah.version.clone(),
     );
+
+    info!("[AUTH] 登录成功: user={}, client={}, device={}", body.username, ah.client, ah.device);
 
     // 获取用户详细信息
     let mut user_info = FnosUserInfo {

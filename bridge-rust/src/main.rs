@@ -16,7 +16,7 @@ use serde_json::json;
 use tower::ServiceExt;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use fnos_bridge::config::BridgeConfig;
 
@@ -214,14 +214,17 @@ async fn redirect_user_resume(
     Redirect::temporary(&format!("/UserItems/Resume{}", query))
 }
 
-async fn root_head() -> StatusCode {
-    StatusCode::OK
+async fn root_head() -> Response {
+    debug!("[ROOT] HEAD /");
+    Redirect::to("/web/").into_response()
 }
 
 async fn root_get() -> Response {
+    debug!("[ROOT] GET /");
     // 如果 web 目录存在，重定向到 /web/，否则返回简单页面
     let web_dir = std::path::Path::new("web");
     if web_dir.exists() {
+        debug!("[ROOT] → 重定向到 /web/");
         Redirect::to("/web/").into_response()
     } else {
         Response::builder()
@@ -238,9 +241,11 @@ async fn root_get() -> Response {
 }
 
 async fn web_redirect_or_index() -> Response {
+    debug!("[ROOT] GET /web");
     // 如果 web 目录存在，重定向到 /web/，否则返回根页面
     let web_dir = std::path::Path::new("web");
     if web_dir.exists() {
+        debug!("[ROOT] → 重定向到 /web/");
         Redirect::to("/web/").into_response()
     } else {
         root_get().await
@@ -365,6 +370,7 @@ fn normalize_path(req: axum::extract::Request) -> axum::extract::Request {
     ];
 
     let path = req.uri().path().to_string();
+    debug!("[PATH] 原始路径: {}", path);
 
     // 跳过静态文件
     if path.starts_with("/web/") {
@@ -402,6 +408,7 @@ fn normalize_path(req: axum::extract::Request) -> axum::extract::Request {
 
     if changed {
         let new_path = new_segments.join("/");
+        debug!("[PATH] 规范化后: {}", new_path);
         let query = req.uri().query().map(|q| format!("?{}", q)).unwrap_or_default();
         let new_uri: axum::http::Uri = format!("{}{}", new_path, query)
             .parse()

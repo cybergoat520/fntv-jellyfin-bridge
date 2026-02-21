@@ -6,7 +6,7 @@ use axum::{
     Json, Router,
 };
 use serde_json::{json, Value};
-use tracing::info;
+use tracing::debug;
 
 use crate::config::BridgeConfig;
 use crate::mappers::id::to_fnos_guid;
@@ -104,7 +104,7 @@ async fn handle_play_report(
     let subtitle_guid = meta.as_ref().map(|m| m.subtitle_guid.as_str()).unwrap_or("");
     let duration = meta.as_ref().map(|m| m.duration).unwrap_or(0.0);
 
-    info!(
+    debug!(
         "[PLAYBACK] {}: item={}, ts={:.1}s, duration={:.1}s",
         event, fnos_guid, ts, duration
     );

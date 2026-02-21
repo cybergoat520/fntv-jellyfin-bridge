@@ -11,7 +11,7 @@ use axum::{
 };
 use reqwest::Client;
 use serde::Deserialize;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::config::BridgeConfig;
 use crate::fnos_client::signature::generate_authx_string;
@@ -71,7 +71,7 @@ async fn video_stream_with_ext(
     Query(query): Query<StreamQuery>,
     req: axum::extract::Request,
 ) -> Response {
-    info!("[STREAM_EXT] 收到带扩展名的流请求: item_id={}, ext={}, uri={}", item_id, _ext, req.uri());
+    debug!("[STREAM_EXT] 收到带扩展名的流请求: item_id={}, ext={}, uri={}", item_id, _ext, req.uri());
     video_stream(State(config), Path(item_id), Query(query), req).await
 }
 
@@ -81,54 +81,54 @@ async fn video_stream(
     Query(query): Query<StreamQuery>,
     req: axum::extract::Request,
 ) -> Response {
-    info!("[STREAM] ====== 开始处理视频流请求 ======");
+    debug!("[STREAM] ====== 开始处理视频流请求 ======");
     
     let session = match req.extensions().get::<SessionData>() {
         Some(s) => s.clone(),
         None => {
-            info!("[STREAM] ❌ 未找到 session，返回 401");
+            debug!("[STREAM] ❌ 未找到 session，返回 401");
             return StatusCode::UNAUTHORIZED.into_response();
         }
     };
-    info!("[STREAM] ✓ 获取 session 成功");
+    debug!("[STREAM] ✓ 获取 session 成功");
 
     let fnos_guid = match to_fnos_guid(&item_id) {
         Some(g) => g,
         None => {
-            info!("[STREAM] ❌ 无法转换 item_id 到 fnos_guid: {}", item_id);
+            debug!("[STREAM] ❌ 无法转换 item_id 到 fnos_guid: {}", item_id);
             return StatusCode::NOT_FOUND.into_response();
         }
     };
-    info!("[STREAM] ✓ fnos_guid={}", fnos_guid);
+    debug!("[STREAM] ✓ fnos_guid={}", fnos_guid);
 
     let range_header = req.headers().get("range").and_then(|v| v.to_str().ok()).map(String::from);
 
-    info!(
+    debug!(
         "[VIDEO] 流请求: itemId={}, fnosGuid={}, range={}",
         item_id, fnos_guid, range_header.as_deref().unwrap_or("none")
     );
 
     // 优先使用 mediaSourceId
     let media_guid = if let Some(ref ms) = query.media_source_id {
-        info!("[STREAM] 使用传入的 media_source_id={}", ms);
+        debug!("[STREAM] 使用传入的 media_source_id={}", ms);
         ms.clone()
     } else {
-        info!("[STREAM] 调用 fnos_get_play_info 获取 media_guid...");
+        debug!("[STREAM] 调用 fnos_get_play_info 获取 media_guid...");
         match fnos_get_play_info(&session.fnos_server, &session.fnos_token, &fnos_guid, &config).await {
             r if r.success && r.data.is_some() => {
                 let mg = r.data.unwrap().media_guid;
-                info!("[STREAM] ✓ 获取 media_guid={}", mg);
+                debug!("[STREAM] ✓ 获取 media_guid={}", mg);
                 mg
             }
             r => {
-                info!("[STREAM] ❌ 获取 play_info 失败: success={}, has_data={}", r.success, r.data.is_some());
+                debug!("[STREAM] ❌ 获取 play_info 失败: success={}, has_data={}", r.success, r.data.is_some());
                 return StatusCode::NOT_FOUND.into_response();
             }
         }
     };
 
     // 获取流信息
-    info!("[STREAM] 调用 fnos_get_stream...");
+    debug!("[STREAM] 调用 fnos_get_stream...");
     let stream_result = fnos_get_stream(
         &session.fnos_server,
         &session.fnos_token,
@@ -137,15 +137,15 @@ async fn video_stream(
         &config,
     )
     .await;
-    info!("[STREAM] ✓ fnos_get_stream 完成, success={}", stream_result.success);
+    debug!("[STREAM] ✓ fnos_get_stream 完成, success={}", stream_result.success);
 
     let (target_url, extra_headers, skip_verify) = build_upstream_target(
         &session, &media_guid, &stream_result, &config,
     );
-    info!("[STREAM] target_url={}, skip_verify={}", target_url, skip_verify);
+    debug!("[STREAM] target_url={}, skip_verify={}", target_url, skip_verify);
 
     // 构建上游请求
-    info!("[STREAM] 构建上游请求...");
+    debug!("[STREAM] 构建上游请求...");
     let client = Client::builder()
         .danger_accept_invalid_certs(skip_verify || config.ignore_cert)
         .timeout(std::time::Duration::from_secs(120))
@@ -153,7 +153,7 @@ async fn video_stream(
         .unwrap_or_default();
 
     let mut upstream_req = client.get(&target_url);
-    info!("[STREAM] ✓ 上游请求构建完成，准备发送...");
+    debug!("[STREAM] ✓ 上游请求构建完成，准备发送...");
 
     // 透传客户端头
     for h in PASSTHROUGH_HEADERS {
@@ -173,11 +173,11 @@ async fn video_stream(
         upstream_req = upstream_req.header("range", "bytes=0-");
     }
 
-    info!("[STREAM] 发送上游请求...");
+    debug!("[STREAM] 发送上游请求...");
     match upstream_req.send().await {
         Ok(resp) => {
             let status = resp.status().as_u16();
-            info!("[STREAM] ✓ 上游响应: status={}", status);
+            debug!("[STREAM] ✓ 上游响应: status={}", status);
             
             // 先决定是否做 206→200 转换
             let (final_status, total_size) = if !client_had_range && status == 206 {
@@ -185,7 +185,7 @@ async fn video_stream(
                     .and_then(|v| v.to_str().ok())
                     .and_then(|cr| cr.rsplit('/').next())
                     .and_then(|s| s.parse::<u64>().ok());
-                info!("[VIDEO] 206→200 转换, total_size={:?}", total);
+                debug!("[VIDEO] 206→200 转换, total_size={:?}", total);
                 (200, total)
             } else {
                 (status, None)
@@ -230,10 +230,10 @@ async fn video_stream(
             }
 
             // 流式传输 body
-            info!("[STREAM] 构建响应 body...");
+            debug!("[STREAM] 构建响应 body...");
             let stream = resp.bytes_stream();
             let body = Body::from_stream(stream);
-            info!("[STREAM] ====== 请求处理完成，返回 {} ======", final_status);
+            debug!("[STREAM] ====== 请求处理完成，返回 {} ======", final_status);
             builder.body(body).unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
         }
         Err(e) => {
@@ -275,7 +275,7 @@ async fn hls_stream(
     let (session_guid, _play_link) = match hls_session {
         Some(s) => s,
         None => {
-            info!("[HLS] 无转码会话: mediaGuid={}", media_guid);
+            debug!("[HLS] 无转码会话: mediaGuid={}", media_guid);
             return StatusCode::NOT_FOUND.into_response();
         }
     };
@@ -286,7 +286,7 @@ async fn hls_stream(
     let target_url = format!("{}{}", fnos_server, fnos_path);
     let authx = generate_authx_string(&fnos_path, None);
 
-    info!(
+    debug!(
         "[HLS] 代理: mediaGuid={} → sessionGuid={}, file={}",
         media_guid, session_guid, actual_file
     );
@@ -308,7 +308,7 @@ async fn hls_stream(
 
             // 410 Gone → 清除会话
             if status == 410 && session.is_some() {
-                info!("[HLS] 410 Gone → 清除会话 mediaGuid={}", media_guid);
+                debug!("[HLS] 410 Gone → 清除会话 mediaGuid={}", media_guid);
                 clear_hls_session(&media_guid);
                 return StatusCode::GONE.into_response();
             }
@@ -405,7 +405,7 @@ async fn subtitle_stream(
         None => return StatusCode::UNAUTHORIZED.into_response(),
     };
 
-    info!(
+    debug!(
         "[SUBTITLE] 字幕请求: itemId={}, mediaSourceId={}, index={}, format={}",
         item_id, media_source_id, index, format
     );
