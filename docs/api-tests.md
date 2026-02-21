@@ -17,8 +17,9 @@
 | Playback API | playback.test.ts | 14 |
 | Resume API | resume.test.ts | 6 |
 | Favorites API | favorites.test.ts | 4 |
+| Cache Sync API | cache-sync.test.ts | 9 |
 | Misc API | misc.test.ts | 18 |
-| **总计** | **12 个文件** | **112 个用例** |
+| **总计** | **13 个文件** | **121 个用例** |
 
 ## 运行测试
 
@@ -219,6 +220,32 @@ npm test -- --test-name-pattern "System"    # 运行指定测试
 | `/UserFavoriteItems/{itemId}` | POST | 是 | 无效 ID 返回 200/204/404 |
 | `/UserFavoriteItems/{itemId}` | DELETE | 是 | 取消收藏，返回 200/204 |
 | `/Items?Filters=IsFavorite` | GET | 是 | 支持 IsFavorite 过滤 |
+
+---
+
+## Cache Sync API
+
+缓存一致性测试，验证收藏、观看、播放状态变更后的列表缓存同步。
+
+| 端点 | 方法 | 认证 | 测试内容 |
+|------|------|------|----------|
+| `/UserFavoriteItems/{itemId}` | POST | 是 | 添加收藏后列表应显示为已收藏 |
+| `/UserFavoriteItems/{itemId}` | DELETE | 是 | 取消收藏后列表应显示为未收藏 |
+| `/Items?Filters=IsFavorite` | GET | 是 | IsFavorite 过滤器应实时反映状态变更 |
+| `/UserPlayedItems/{itemId}` | POST | 是 | 标记已看后列表应显示为已观看 |
+| `/UserPlayedItems/{itemId}` | DELETE | 是 | 取消已看后列表应显示为未观看 |
+| `/UserPlayedItems/{itemId}` | POST | 是 | 有播放进度时标记已看应清除进度 |
+| `/Sessions/Playing/Progress` | POST | 是 | 上报播放进度后应出现在继续观看列表 |
+| `/Sessions/Playing/Stopped` | POST | 是 | 播放停止后进度应正确保存 |
+| `/Sessions/Playing/*` | POST | 是 | 多次播放上报应正常工作（PlayInfo缓存） |
+| `/Sessions/Playing/*` | POST | 是 | 混合播放事件上报应正常工作 |
+| `/Items/Latest` | GET | 是 | 最近添加列表应正确返回 |
+
+### 缓存机制说明
+
+- **列表缓存 (CACHE)**: TTL 30秒，媒体列表数据缓存
+- **PlayInfo缓存 (PLAY_INFO_CACHE)**: TTL 5分钟，播放上报时复用媒体信息
+- **缓存同步**: 收藏/观看/播放操作成功后，立即更新本地缓存
 
 ---
 

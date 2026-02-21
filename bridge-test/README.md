@@ -37,6 +37,7 @@ npm run test:auth        # 认证和用户 API
 npm run test:items       # 媒体项目 API
 npm run test:playback    # 播放状态 API
 npm run test:stream      # 视频流 API
+npm run test:cache       # 缓存同步测试
 ```
 
 ## 测试覆盖
@@ -54,6 +55,7 @@ npm run test:stream      # 视频流 API
 | Branding | `/Branding/*` | 品牌配置 |
 | Favorites | `/UserFavoriteItems/*` | 收藏功能 |
 | Resume | `/UserItems/Resume` | 继续观看 |
+| Cache Sync | 收藏/观看/播放状态变更 | 缓存一致性测试 |
 | Misc | `/Localization/*`, `/DisplayPreferences/*` | 其他端点 |
 
 ## 测试结构
@@ -67,19 +69,20 @@ bridge-test/
 │   ├── auth-helper.ts    # 认证辅助函数
 │   └── index.ts          # 库导出
 ├── tests/
-│   ├── index.ts          # 测试入口
-│   ├── system.test.ts    # System API 测试
-│   ├── auth.test.ts      # Auth API 测试
-│   ├── views.test.ts     # Views API 测试
-│   ├── items.test.ts     # Items API 测试
-│   ├── shows.test.ts     # Shows API 测试
-│   ├── playback.test.ts  # Playback API 测试
-│   ├── stream.test.ts    # Stream API 测试
-│   ├── images.test.ts    # Images API 测试
-│   ├── branding.test.ts  # Branding API 测试
-│   ├── favorites.test.ts # Favorites API 测试
-│   ├── resume.test.ts    # Resume API 测试
-│   └── misc.test.ts      # 其他端点测试
+│   ├── index.ts              # 测试入口
+│   ├── system.test.ts        # System API 测试
+│   ├── auth.test.ts          # Auth API 测试
+│   ├── views.test.ts         # Views API 测试
+│   ├── items.test.ts         # Items API 测试
+│   ├── shows.test.ts         # Shows API 测试
+│   ├── playback.test.ts      # Playback API 测试
+│   ├── stream.test.ts        # Stream API 测试
+│   ├── images.test.ts        # Images API 测试
+│   ├── branding.test.ts      # Branding API 测试
+│   ├── favorites.test.ts     # Favorites API 测试
+│   ├── resume.test.ts        # Resume API 测试
+│   ├── cache-sync.test.ts    # 缓存同步测试
+│   └── misc.test.ts          # 其他端点测试
 └── README.md             # 本文档
 ```
 

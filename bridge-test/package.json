@@ -17,7 +17,8 @@
     "test:branding": "node --test tests/branding.test.ts",
     "test:favorites": "node --test tests/favorites.test.ts",
     "test:resume": "node --test tests/resume.test.ts",
-    "test:misc": "node --test tests/misc.test.ts"
+    "test:misc": "node --test tests/misc.test.ts",
+    "test:cache": "node --test tests/cache-sync.test.ts"
   },
   "dependencies": {
     "axios": "^1.7.0"
