@@ -7,7 +7,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::json;
-use tracing::{info, warn};
+use tracing::{debug, warn};
 
 use crate::config::BridgeConfig;
 use crate::mappers::id::*;
@@ -92,7 +92,7 @@ async fn items_list(
         None => return (axum::http::StatusCode::UNAUTHORIZED, Json(json!({"error":"Unauthorized"}))).into_response(),
     };
 
-    info!("[ITEMS] 请求 URI: {}", req.uri());
+    debug!("[ITEMS] 请求 URI: {}", req.uri());
 
     let server_id = generate_server_id(&config.fnos_server);
     let filters = query.filters.as_deref().unwrap_or("");
@@ -128,7 +128,7 @@ async fn items_list(
 
         let parent_guid = if is_virtual_view { "" } else { &fnos_parent };
 
-        info!("[ITEMS] 分支1: parent_id={}, fnos_parent={}, is_virtual_view={}, view_filter={}", parent_id, fnos_parent, is_virtual_view, view_filter);
+        debug!("[ITEMS] 分支1: parent_id={}, fnos_parent={}, is_virtual_view={}, view_filter={}", parent_id, fnos_parent, is_virtual_view, view_filter);
 
         let result = cached_get_item_list(
             &session.fnos_server,
@@ -145,7 +145,7 @@ async fn items_list(
         }
 
         let list_data = result.data.unwrap();
-        info!("[ITEMS] 飞牛返回 {} 条", list_data.list.len());
+        debug!("[ITEMS] 飞牛返回 {} 条", list_data.list.len());
 
         let mut filtered: Vec<_> = list_data.list.iter().collect();
 
@@ -190,7 +190,7 @@ async fn items_list(
             .map(|item| map_playlist_item_to_dto(item, &server_id, &session.fnos_server, &session.fnos_token))
             .collect();
 
-        info!("[ITEMS] 过滤后 {} 条", all_dtos.len());
+        debug!("[ITEMS] 过滤后 {} 条", all_dtos.len());
 
         let total = all_dtos.len() as i64;
         let start = query.start_index.unwrap_or(0) as usize;
@@ -207,7 +207,7 @@ async fn items_list(
     // ===== 分支 2: 无 ParentId + Recursive（全局搜索/收藏夹等） =====
     let recursive = query.recursive.as_deref() == Some("true");
     if recursive && (!filters.is_empty() || query.search_term.is_some() || !include_item_types.is_empty()) {
-        info!("[ITEMS] 分支2: recursive, filters={}, include_item_types={}", filters, include_item_types);
+        debug!("[ITEMS] 分支2: recursive, filters={}, include_item_types={}", filters, include_item_types);
 
         let result = cached_get_item_list(
             &session.fnos_server,
@@ -262,7 +262,7 @@ async fn items_list(
             .map(|item| map_playlist_item_to_dto(item, &server_id, &session.fnos_server, &session.fnos_token))
             .collect();
 
-        info!("[ITEMS] 过滤后 {} 条", all_dtos.len());
+        debug!("[ITEMS] 过滤后 {} 条", all_dtos.len());
 
         let total = all_dtos.len() as i64;
         let start = query.start_index.unwrap_or(0) as usize;
@@ -277,7 +277,7 @@ async fn items_list(
     }
 
     // ===== 分支 3: 无 ParentId 也无 Recursive，返回空 =====
-    info!("[ITEMS] 分支3: 无 ParentId 无 Recursive，返回空");
+    debug!("[ITEMS] 分支3: 无 ParentId 无 Recursive，返回空");
     Json(ItemsResult { items: vec![], total_record_count: 0, start_index: 0 }).into_response()
 }
 
@@ -288,8 +288,8 @@ async fn items_latest(
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
 
-    info!("[LATEST] 请求 URI: {}", req.uri());
-
+    debug!("[LATEST] 请求 URI: {}", req.uri());
+    
     let session = match req.extensions().get::<SessionData>() {
         Some(s) => s.clone(),
         None => return (axum::http::StatusCode::UNAUTHORIZED, Json(json!({"error":"Unauthorized"}))).into_response(),
@@ -308,7 +308,7 @@ async fn items_latest(
     .await;
 
     if !result.success || result.data.is_none() {
-        info!("[LATEST] 飞牛请求失败");
+        warn!("[LATEST] 飞牛请求失败");
         return Json::<Vec<BaseItemDto>>(vec![]).into_response();
     }
 
@@ -348,7 +348,7 @@ async fn items_latest(
         .map(|item| map_playlist_item_to_dto(item, &server_id, &session.fnos_server, &session.fnos_token))
         .collect();
 
-    info!("[LATEST] 飞牛返回 {} 条, view_filter={}, 过滤后 {} 条", list_data.list.len(), view_filter, items.len());
+    debug!("[LATEST] 飞牛返回 {} 条, view_filter={}, 过滤后 {} 条", list_data.list.len(), view_filter, items.len());
 
     Json(items).into_response()
 }
@@ -366,7 +366,7 @@ async fn items_detail(
         None => return (axum::http::StatusCode::UNAUTHORIZED, Json(json!({"error":"Unauthorized"}))).into_response(),
     };
 
-    info!("[ITEMS] 请求 URI: {}", req.uri());
+    debug!("[ITEMS] 请求 URI: {}", req.uri());
 
     let server_id = generate_server_id(&config.fnos_server);
     let fnos_guid = to_fnos_guid(&item_id);
@@ -426,7 +426,7 @@ async fn items_resume(
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
 
-    info!("[RESUME] 请求 URI: {}", req.uri());
+    debug!("[RESUME] 请求 URI: {}", req.uri());
 
     // 飞牛只有视频内容，音频和书籍返回空
     let media_types = query.media_types.as_deref().unwrap_or("");
@@ -452,7 +452,7 @@ async fn items_resume(
     .await;
 
     if !result.success || result.data.is_none() {
-        info!("[RESUME] 飞牛请求失败: {:?}", result.message);
+        warn!("[RESUME] 飞牛请求失败: {:?}", result.message);
         return Json(ItemsResult { items: vec![], total_record_count: 0, start_index: 0 }).into_response();
     }
 
@@ -467,7 +467,7 @@ async fn items_resume(
         .map(|item| map_playlist_item_to_dto(item, &server_id, &session.fnos_server, &session.fnos_token))
         .collect();
 
-    info!("[RESUME] 飞牛返回 {} 条, 过滤后 {} 条", list_data.list.len(), items.len());
+    debug!("[RESUME] 飞牛返回 {} 条, 过滤后 {} 条", list_data.list.len(), items.len());
 
     let total = items.len() as i64;
     Json(ItemsResult { items, total_record_count: total, start_index: 0 }).into_response()

@@ -206,23 +206,39 @@ fn build_single_media_source(
 
     // 显示名称
     let vs0 = video_streams.first();
+    tracing::debug!("[MEDIA] file_name={}, video_streams={}, audio_streams={}, file_info={:?}",
+        file_name, video_streams.len(), audio_streams.len(),
+        file_info.map(|f| f.to_string()).unwrap_or_default()
+    );
+    if let Some(vs) = video_streams.first() {
+        tracing::debug!("[MEDIA] video_stream[0]: {}", vs);
+    }
     let mut display_name = if !file_name.is_empty() {
         file_name.to_string()
     } else {
         "Video".to_string()
     };
     if let Some(vs) = vs0 {
-        display_name = format_video_title(vs);
-        if let Some(fi) = file_info {
-            if let Some(size) = fi["size"].as_i64() {
-                let size_mb = size / 1024 / 1024;
-                if size_mb > 1024 {
-                    display_name = format!("{} ({:.1}GB)", display_name, size_mb as f64 / 1024.0);
-                } else {
-                    display_name = format!("{} ({}MB)", display_name, size_mb);
+        let codec = vs["codec_name"].as_str().unwrap_or("");
+        let height = vs["height"].as_i64().unwrap_or(0);
+        if codec.is_empty() && height == 0 {
+            // 远程文件：视频流信息为空
+            display_name = format_remote_file_name(file_info);
+        } else {
+            display_name = format_video_title(vs);
+            if let Some(fi) = file_info {
+                if let Some(size) = fi["size"].as_i64() {
+                    let size_mb = size / 1024 / 1024;
+                    if size_mb > 1024 {
+                        display_name = format!("{} ({:.1}GB)", display_name, size_mb as f64 / 1024.0);
+                    } else {
+                        display_name = format!("{} ({}MB)", display_name, size_mb);
+                    }
                 }
             }
         }
+    } else {
+        display_name = format_remote_file_name(file_info);
     }
 
     // 检测是否需要转码
@@ -370,6 +386,20 @@ fn parse_frame_rate(rate: &str) -> Option<f64> {
         }
     }
     rate.parse().ok()
+}
+
+fn format_remote_file_name(file_info: Option<&serde_json::Value>) -> String {
+    if let Some(fi) = file_info {
+        if let Some(size) = fi["size"].as_i64() {
+            let size_mb = size / 1024 / 1024;
+            if size_mb > 1024 {
+                return format!("远程文件 ({:.1}GB)", size_mb as f64 / 1024.0);
+            } else {
+                return format!("远程文件 ({}MB)", size_mb);
+            }
+        }
+    }
+    "远程文件".to_string()
 }
 
 fn format_video_title(vs: &serde_json::Value) -> String {
