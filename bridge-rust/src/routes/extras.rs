@@ -5,12 +5,13 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
-use serde_json::json;
+use tracing::{debug, warn};
 
 use crate::config::BridgeConfig;
 use crate::mappers::id::to_fnos_guid;
 use crate::middleware::auth::require_auth;
-use crate::services::fnos::{fnos_set_favorite, fnos_set_watched};
+use crate::services::fnos::{fnos_get_play_info, fnos_set_favorite, fnos_set_watched};
+use crate::services::item_list_cache::update_item_from_play_info;
 use crate::services::session::SessionData;
 use crate::types::jellyfin::UserItemDataDto;
 
@@ -59,94 +60,210 @@ async fn favorite_add(
     State(config): State<BridgeConfig>,
     Path(item_id): Path<String>,
     req: axum::extract::Request,
-) -> Json<UserItemDataDto> {
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    use axum::http::StatusCode;
+    
     let session = req.extensions().get::<SessionData>().cloned().unwrap();
     if let Some(guid) = to_fnos_guid(&item_id) {
-        let _ = fnos_set_favorite(&session.fnos_server, &session.fnos_token, &guid, true, &config).await;
+        debug!("[FAVORITE] 添加收藏: item_id={}, fnos_guid={}", item_id, guid);
+        let result = fnos_set_favorite(&session.fnos_server, &session.fnos_token, &guid, true, &config).await;
+        if result.success {
+            // 获取最新状态并更新缓存
+            let play_info = fnos_get_play_info(&session.fnos_server, &session.fnos_token, &guid, &config).await;
+            if let Some(info) = play_info.data {
+                update_item_from_play_info(&session.fnos_server, &info);
+            }
+        }
+        debug!("[FAVORITE] 添加收藏结果: success={}, message={:?}", result.success, result.message);
+        Json(default_user_data(true, false)).into_response()
+    } else {
+        warn!("[FAVORITE] 无法转换 item_id: {}", item_id);
+        (StatusCode::NOT_FOUND, Json(default_user_data(false, false))).into_response()
     }
-    Json(default_user_data(true, false))
 }
 
 async fn favorite_remove(
     State(config): State<BridgeConfig>,
     Path(item_id): Path<String>,
     req: axum::extract::Request,
-) -> Json<UserItemDataDto> {
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    use axum::http::StatusCode;
+    
     let session = req.extensions().get::<SessionData>().cloned().unwrap();
     if let Some(guid) = to_fnos_guid(&item_id) {
-        let _ = fnos_set_favorite(&session.fnos_server, &session.fnos_token, &guid, false, &config).await;
+        debug!("[FAVORITE] 取消收藏: item_id={}, fnos_guid={}", item_id, guid);
+        let result = fnos_set_favorite(&session.fnos_server, &session.fnos_token, &guid, false, &config).await;
+        if result.success {
+            // 获取最新状态并更新缓存
+            let play_info = fnos_get_play_info(&session.fnos_server, &session.fnos_token, &guid, &config).await;
+            if let Some(info) = play_info.data {
+                update_item_from_play_info(&session.fnos_server, &info);
+            }
+        }
+        debug!("[FAVORITE] 取消收藏结果: success={}, message={:?}", result.success, result.message);
+        Json(default_user_data(false, false)).into_response()
+    } else {
+        warn!("[FAVORITE] 无法转换 item_id: {}", item_id);
+        (StatusCode::NOT_FOUND, Json(default_user_data(false, false))).into_response()
     }
-    Json(default_user_data(false, false))
 }
 
 async fn favorite_add_compat(
     State(config): State<BridgeConfig>,
     Path((_uid, item_id)): Path<(String, String)>,
     req: axum::extract::Request,
-) -> Json<UserItemDataDto> {
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    use axum::http::StatusCode;
+    
     let session = req.extensions().get::<SessionData>().cloned().unwrap();
     if let Some(guid) = to_fnos_guid(&item_id) {
-        let _ = fnos_set_favorite(&session.fnos_server, &session.fnos_token, &guid, true, &config).await;
+        debug!("[FAVORITE] 添加收藏(compat): item_id={}, fnos_guid={}", item_id, guid);
+        let result = fnos_set_favorite(&session.fnos_server, &session.fnos_token, &guid, true, &config).await;
+        if result.success {
+            let play_info = fnos_get_play_info(&session.fnos_server, &session.fnos_token, &guid, &config).await;
+            if let Some(info) = play_info.data {
+                update_item_from_play_info(&session.fnos_server, &info);
+            }
+        }
+        debug!("[FAVORITE] 添加收藏结果: success={}, message={:?}", result.success, result.message);
+        Json(default_user_data(true, false)).into_response()
+    } else {
+        warn!("[FAVORITE] 无法转换 item_id: {}", item_id);
+        (StatusCode::NOT_FOUND, Json(default_user_data(false, false))).into_response()
     }
-    Json(default_user_data(true, false))
 }
 
 async fn favorite_remove_compat(
     State(config): State<BridgeConfig>,
     Path((_uid, item_id)): Path<(String, String)>,
     req: axum::extract::Request,
-) -> Json<UserItemDataDto> {
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    use axum::http::StatusCode;
+    
     let session = req.extensions().get::<SessionData>().cloned().unwrap();
     if let Some(guid) = to_fnos_guid(&item_id) {
-        let _ = fnos_set_favorite(&session.fnos_server, &session.fnos_token, &guid, false, &config).await;
+        debug!("[FAVORITE] 取消收藏(compat): item_id={}, fnos_guid={}", item_id, guid);
+        let result = fnos_set_favorite(&session.fnos_server, &session.fnos_token, &guid, false, &config).await;
+        if result.success {
+            let play_info = fnos_get_play_info(&session.fnos_server, &session.fnos_token, &guid, &config).await;
+            if let Some(info) = play_info.data {
+                update_item_from_play_info(&session.fnos_server, &info);
+            }
+        }
+        debug!("[FAVORITE] 取消收藏结果: success={}, message={:?}", result.success, result.message);
+        Json(default_user_data(false, false)).into_response()
+    } else {
+        warn!("[FAVORITE] 无法转换 item_id: {}", item_id);
+        (StatusCode::NOT_FOUND, Json(default_user_data(false, false))).into_response()
     }
-    Json(default_user_data(false, false))
 }
 
 async fn played_add(
     State(config): State<BridgeConfig>,
     Path(item_id): Path<String>,
     req: axum::extract::Request,
-) -> Json<UserItemDataDto> {
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    use axum::http::StatusCode;
+    
     let session = req.extensions().get::<SessionData>().cloned().unwrap();
     if let Some(guid) = to_fnos_guid(&item_id) {
-        let _ = fnos_set_watched(&session.fnos_server, &session.fnos_token, &guid, true, &config).await;
+        debug!("[PLAYED] 标记已看: item_id={}, fnos_guid={}", item_id, guid);
+        let result = fnos_set_watched(&session.fnos_server, &session.fnos_token, &guid, true, &config).await;
+        if result.success {
+            // 获取最新状态并更新缓存
+            let play_info = fnos_get_play_info(&session.fnos_server, &session.fnos_token, &guid, &config).await;
+            if let Some(info) = play_info.data {
+                update_item_from_play_info(&session.fnos_server, &info);
+            }
+        }
+        debug!("[PLAYED] 标记已看结果: success={}, message={:?}", result.success, result.message);
+        Json(default_user_data(false, true)).into_response()
+    } else {
+        warn!("[PLAYED] 无法转换 item_id: {}", item_id);
+        (StatusCode::NOT_FOUND, Json(default_user_data(false, false))).into_response()
     }
-    Json(default_user_data(false, true))
 }
 
 async fn played_remove(
     State(config): State<BridgeConfig>,
     Path(item_id): Path<String>,
     req: axum::extract::Request,
-) -> Json<UserItemDataDto> {
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    use axum::http::StatusCode;
+    
     let session = req.extensions().get::<SessionData>().cloned().unwrap();
     if let Some(guid) = to_fnos_guid(&item_id) {
-        let _ = fnos_set_watched(&session.fnos_server, &session.fnos_token, &guid, false, &config).await;
+        debug!("[PLAYED] 取消已看: item_id={}, fnos_guid={}", item_id, guid);
+        let result = fnos_set_watched(&session.fnos_server, &session.fnos_token, &guid, false, &config).await;
+        if result.success {
+            // 获取最新状态并更新缓存
+            let play_info = fnos_get_play_info(&session.fnos_server, &session.fnos_token, &guid, &config).await;
+            if let Some(info) = play_info.data {
+                update_item_from_play_info(&session.fnos_server, &info);
+            }
+        }
+        debug!("[PLAYED] 取消已看结果: success={}, message={:?}", result.success, result.message);
+        Json(default_user_data(false, false)).into_response()
+    } else {
+        warn!("[PLAYED] 无法转换 item_id: {}", item_id);
+        (StatusCode::NOT_FOUND, Json(default_user_data(false, false))).into_response()
     }
-    Json(default_user_data(false, false))
 }
 
 async fn played_add_compat(
     State(config): State<BridgeConfig>,
     Path((_uid, item_id)): Path<(String, String)>,
     req: axum::extract::Request,
-) -> Json<UserItemDataDto> {
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    use axum::http::StatusCode;
+    
     let session = req.extensions().get::<SessionData>().cloned().unwrap();
     if let Some(guid) = to_fnos_guid(&item_id) {
-        let _ = fnos_set_watched(&session.fnos_server, &session.fnos_token, &guid, true, &config).await;
+        debug!("[PLAYED] 标记已看(compat): item_id={}, fnos_guid={}", item_id, guid);
+        let result = fnos_set_watched(&session.fnos_server, &session.fnos_token, &guid, true, &config).await;
+        if result.success {
+            let play_info = fnos_get_play_info(&session.fnos_server, &session.fnos_token, &guid, &config).await;
+            if let Some(info) = play_info.data {
+                update_item_from_play_info(&session.fnos_server, &info);
+            }
+        }
+        debug!("[PLAYED] 标记已看结果: success={}, message={:?}", result.success, result.message);
+        Json(default_user_data(false, true)).into_response()
+    } else {
+        warn!("[PLAYED] 无法转换 item_id: {}", item_id);
+        (StatusCode::NOT_FOUND, Json(default_user_data(false, false))).into_response()
     }
-    Json(default_user_data(false, true))
 }
 
 async fn played_remove_compat(
     State(config): State<BridgeConfig>,
     Path((_uid, item_id)): Path<(String, String)>,
     req: axum::extract::Request,
-) -> Json<UserItemDataDto> {
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    use axum::http::StatusCode;
+    
     let session = req.extensions().get::<SessionData>().cloned().unwrap();
     if let Some(guid) = to_fnos_guid(&item_id) {
-        let _ = fnos_set_watched(&session.fnos_server, &session.fnos_token, &guid, false, &config).await;
+        debug!("[PLAYED] 取消已看(compat): item_id={}, fnos_guid={}", item_id, guid);
+        let result = fnos_set_watched(&session.fnos_server, &session.fnos_token, &guid, false, &config).await;
+        if result.success {
+            let play_info = fnos_get_play_info(&session.fnos_server, &session.fnos_token, &guid, &config).await;
+            if let Some(info) = play_info.data {
+                update_item_from_play_info(&session.fnos_server, &info);
+            }
+        }
+        debug!("[PLAYED] 取消已看结果: success={}, message={:?}", result.success, result.message);
+        Json(default_user_data(false, false)).into_response()
+    } else {
+        warn!("[PLAYED] 无法转换 item_id: {}", item_id);
+        (StatusCode::NOT_FOUND, Json(default_user_data(false, false))).into_response()
     }
-    Json(default_user_data(false, false))
 }
