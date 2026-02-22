@@ -1,11 +1,15 @@
 /// PlaybackInfo 路由
 
 use axum::{
+    body::to_bytes,
     extract::{Path, State},
+    response::IntoResponse,
     routing::post,
     Json, Router,
 };
+use serde::Deserialize;
 use serde_json::json;
+use tracing::{debug, info, warn};
 
 use crate::config::BridgeConfig;
 use crate::mappers::id::*;
@@ -14,6 +18,13 @@ use crate::middleware::auth::{extract_token, require_auth};
 use crate::services::fnos::*;
 use crate::services::hls_session::{register_stream_meta, StreamMeta};
 use crate::services::session::SessionData;
+
+/// PlaybackInfo POST body
+#[derive(Deserialize, Default, Debug)]
+struct PlaybackInfoDto {
+    #[serde(rename = "MediaSourceId")]
+    media_source_id: Option<String>,
+}
 
 pub fn router() -> Router<BridgeConfig> {
     Router::new()
@@ -32,15 +43,41 @@ async fn playback_info(
     Path(item_id): Path<String>,
     req: axum::extract::Request,
 ) -> axum::response::Response {
-    use axum::response::IntoResponse;
     use axum::http::StatusCode;
 
+    // 先提取 session
     let session = match req.extensions().get::<SessionData>() {
         Some(s) => s.clone(),
         None => return (StatusCode::UNAUTHORIZED, Json(json!({"error":"Unauthorized"}))).into_response(),
     };
 
     let (user_token, _) = extract_token(&req);
+
+    // 读取请求 body（因为 axum 还没有消费它）
+    let body_bytes = match to_bytes(req.into_body(), 1024 * 64).await {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            debug!("[PlaybackInfo] 读取 body 失败: {}", e);
+            return (StatusCode::BAD_REQUEST, Json(json!({"error":"Bad request"}))).into_response();
+        }
+    };
+
+    // 解析 body 获取 MediaSourceId
+    let body: PlaybackInfoDto = match serde_json::from_slice(&body_bytes) {
+        Ok(dto) => dto,
+        Err(e) => {
+            debug!("[PlaybackInfo] 解析 body 失败: {}", e);
+            PlaybackInfoDto::default()
+        }
+    };
+
+    let requested_media_source_id = body.media_source_id.unwrap_or_default();
+
+    if !requested_media_source_id.is_empty() {
+        debug!("[PlaybackInfo] 客户端请求指定版本: MediaSourceId={}", requested_media_source_id);
+    } else {
+        debug!("[PlaybackInfo] 未指定 MediaSourceId");
+    }
 
     let fnos_guid = match to_fnos_guid(&item_id) {
         Some(g) => g,
@@ -89,6 +126,20 @@ async fn playback_info(
         &subtitle_streams,
         play_info.item.duration,
     );
+
+    // 如果客户端指定了 MediaSourceId，只返回那个版本
+    // 这样前端就会使用用户明确选择的版本
+    if !requested_media_source_id.is_empty() {
+        if let Some(pos) = media_sources.iter().position(|ms| {
+            ms["Id"].as_str() == Some(&requested_media_source_id)
+        }) {
+            let selected = media_sources.remove(pos);
+            media_sources = vec![selected];
+            debug!("[PlaybackInfo] 只返回指定版本: {}", requested_media_source_id);
+        } else {
+            warn!("[PlaybackInfo] 指定的版本未找到: {}", requested_media_source_id);
+        }
+    }
 
     // 注册流元数据 + 注入 api_key
     for ms in &mut media_sources {

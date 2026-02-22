@@ -54,3 +54,43 @@
 - 需要充分测试各主流客户端（jellyfin-web、Xbox、Android、iOS）
 
 **建议**：选项 A（保持现状），因为没有实际场景需要双斜杠支持，且大小写规范化对容错有帮助。`path-normalization.test.ts` 中的测试可以保留作为回归测试，但标记为可选/容错性质。
+
+## 6. DeviceProfile 支持（精确 DirectStream 判断）
+
+**现状**：当前 `SupportsDirectStream` 基于硬编码的浏览器兼容音频列表（AAC/MP3/FLAC/Opus 等）判断，不考虑客户端传来的实际能力：
+
+```rust
+const BROWSER_COMPATIBLE_CODECS: &[&str] = &["aac", "mp3", "flac", "opus", ...];
+```
+
+**问题**：
+- 老浏览器可能不支持 FLAC/Opus，但我们显示 `SupportsDirectStream=true`
+- Xbox、手机等客户端能力不同，但判断逻辑一样
+- 客户端在 `PlaybackInfo` 请求中传了 `DeviceProfile`，我们未解析使用
+
+**标准 Jellyfin 行为**：
+客户端请求 `PlaybackInfo` 时传入 `DeviceProfile`，包含：
+```json
+{
+  "DeviceProfile": {
+    "DirectPlayProfiles": [{"Container": "mkv", "VideoCodec": "h264,hevc", "AudioCodec": "aac,mp3"}],
+    "CodecProfiles": [...],
+    "TranscodingProfiles": [...]
+  }
+}
+```
+
+服务器根据客户端声明的能力，精确计算每个版本的 `SupportsDirectStream`。
+
+**方案**：
+1. 在 `mediainfo.rs` 中解析 `DeviceProfile`
+2. 根据 `DirectPlayProfiles` 和 `CodecProfiles` 判断视频/音频兼容性
+3. 动态设置 `SupportsDirectStream`
+4. 如果未传 `DeviceProfile`，回退到当前硬编码逻辑
+
+**影响**：
+- 客户端自动选择版本更准确
+- 减少因误判导致的播放失败
+- 多版本场景下用户体验更好（自动选最优版本而非保守选择）
+
+**优先级**：低（当前硬编码覆盖大多数场景）

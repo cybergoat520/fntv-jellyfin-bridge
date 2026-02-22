@@ -109,70 +109,57 @@ async fn handle_play_report(
 
     let ts = ticks_to_seconds(position_ticks);
 
-    // 优先从缓存获取播放信息
-    let play_data = if let Some(cached) = PLAY_INFO_CACHE.get(&fnos_guid) {
-        if cached.cached_at.elapsed().as_secs() < CACHE_TTL_SECS {
-            Some((
-                cached.media_guid.clone(),
-                cached.video_guid.clone(),
-                cached.audio_guid.clone(),
-                cached.subtitle_guid.clone(),
-                cached.duration,
-            ))
-        } else {
-            None
-        }
+    // 获取客户端指定的 MediaSourceId（版本选择）
+    let requested_media_source_id = body["MediaSourceId"].as_str().unwrap_or("").to_string();
+
+    // 优先从缓存获取播放信息（仅在未指定版本时使用缓存）
+    let play_data = if requested_media_source_id.is_empty() {
+        PLAY_INFO_CACHE.get(&fnos_guid).and_then(|cached| {
+            if cached.cached_at.elapsed().as_secs() < CACHE_TTL_SECS {
+                Some((
+                    cached.media_guid.clone(),
+                    cached.video_guid.clone(),
+                    cached.audio_guid.clone(),
+                    cached.subtitle_guid.clone(),
+                    cached.duration,
+                ))
+            } else {
+                None
+            }
+        })
     } else {
         None
     };
 
-    // 缓存未命中，请求 play/info
+    // 缓存未命中或指定了版本，请求 play/info 或从 stream_meta 获取
     let (media_guid, video_guid, audio_guid, subtitle_guid, duration) = match play_data {
         Some(data) => data,
         None => {
-            let result = fnos_get_play_info(
-                &session.fnos_server,
-                &session.fnos_token,
-                &fnos_guid,
-                config,
-            )
-            .await;
-
-            if result.success && result.data.is_some() {
-                let info = result.data.unwrap();
-                let duration = info.item.duration;
-
-                // 写入缓存
-                PLAY_INFO_CACHE.insert(
-                    fnos_guid.clone(),
-                    PlayInfoCacheEntry {
-                        media_guid: info.media_guid.clone(),
-                        video_guid: info.video_guid.clone(),
-                        audio_guid: info.audio_guid.clone(),
-                        subtitle_guid: info.subtitle_guid.clone(),
-                        duration,
-                        cached_at: Instant::now(),
-                    },
-                );
-
-                (
-                    info.media_guid,
-                    info.video_guid,
-                    info.audio_guid,
-                    info.subtitle_guid,
-                    duration,
-                )
+            // 如果客户端指定了 MediaSourceId，优先从 stream_meta 获取该版本的信息
+            if !requested_media_source_id.is_empty() {
+                if let Some(meta) = get_stream_meta(&requested_media_source_id) {
+                    debug!(
+                        "[PLAYBACK] 使用客户端指定的版本: media_source_id={}",
+                        requested_media_source_id
+                    );
+                    (
+                        requested_media_source_id.clone(),
+                        meta.video_guid,
+                        meta.audio_guid,
+                        meta.subtitle_guid,
+                        meta.duration,
+                    )
+                } else {
+                    // stream_meta 中未找到，尝试请求 play/info 获取默认版本
+                    debug!(
+                        "[PLAYBACK] 未找到指定版本的流元数据，使用默认版本: media_source_id={}",
+                        requested_media_source_id
+                    );
+                    fetch_play_info_and_cache(&session, &fnos_guid, config).await
+                }
             } else {
-                // 请求失败，尝试从 stream_meta 获取（HLS 场景）
-                let media_source_id = body["MediaSourceId"].as_str().unwrap_or("");
-                let meta = get_stream_meta(media_source_id);
-                (
-                    media_source_id.to_string(),
-                    meta.as_ref().map(|m| m.video_guid.clone()).unwrap_or_default(),
-                    meta.as_ref().map(|m| m.audio_guid.clone()).unwrap_or_default(),
-                    meta.as_ref().map(|m| m.subtitle_guid.clone()).unwrap_or_default(),
-                    meta.as_ref().map(|m| m.duration).unwrap_or(0.0),
-                )
+                // 未指定版本，请求 play/info 获取默认版本
+                fetch_play_info_and_cache(&session, &fnos_guid, config).await
             }
         }
     };
@@ -216,4 +203,49 @@ async fn handle_play_report(
     PLAY_INFO_CACHE.retain(|_, v| v.cached_at.elapsed().as_secs() < CACHE_TTL_SECS * 2);
 
     axum::http::StatusCode::NO_CONTENT
+}
+
+/// 请求 play/info 并将结果写入缓存
+async fn fetch_play_info_and_cache(
+    session: &SessionData,
+    fnos_guid: &str,
+    config: &BridgeConfig,
+) -> (String, String, String, String, f64) {
+    let result = fnos_get_play_info(
+        &session.fnos_server,
+        &session.fnos_token,
+        fnos_guid,
+        config,
+    )
+    .await;
+
+    if result.success && result.data.is_some() {
+        let info = result.data.unwrap();
+        let duration = info.item.duration;
+
+        // 写入缓存
+        PLAY_INFO_CACHE.insert(
+            fnos_guid.to_string(),
+            PlayInfoCacheEntry {
+                media_guid: info.media_guid.clone(),
+                video_guid: info.video_guid.clone(),
+                audio_guid: info.audio_guid.clone(),
+                subtitle_guid: info.subtitle_guid.clone(),
+                duration,
+                cached_at: Instant::now(),
+            },
+        );
+
+        (
+            info.media_guid,
+            info.video_guid,
+            info.audio_guid,
+            info.subtitle_guid,
+            duration,
+        )
+    } else {
+        // 请求失败，返回空值
+        debug!("[PLAYBACK] 获取 play/info 失败: {:?}", result.message);
+        (String::new(), String::new(), String::new(), String::new(), 0.0)
+    }
 }

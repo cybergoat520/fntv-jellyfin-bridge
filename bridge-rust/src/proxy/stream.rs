@@ -83,6 +83,10 @@ async fn video_stream(
 ) -> Response {
     debug!("[STREAM] ====== 开始处理视频流请求 ======");
     
+    // 记录完整 URI 用于诊断
+    let full_uri = req.uri().to_string();
+    debug!("[STREAM] 完整请求 URI: {}", full_uri);
+    
     let session = match req.extensions().get::<SessionData>() {
         Some(s) => s.clone(),
         None => {
@@ -108,9 +112,15 @@ async fn video_stream(
         item_id, fnos_guid, range_header.as_deref().unwrap_or("none")
     );
 
+    // 记录客户端是否传了 mediaSourceId
+    debug!(
+        "[STREAM] mediaSourceId 参数: {:?}",
+        query.media_source_id
+    );
+
     // 优先使用 mediaSourceId
     let media_guid = if let Some(ref ms) = query.media_source_id {
-        debug!("[STREAM] 使用传入的 media_source_id={}", ms);
+        debug!("[STREAM] 客户端指定版本: media_source_id={}", ms);
         ms.clone()
     } else {
         debug!("[STREAM] 调用 fnos_get_play_info 获取 media_guid...");
