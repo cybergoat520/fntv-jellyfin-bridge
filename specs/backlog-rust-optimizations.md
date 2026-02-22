@@ -94,3 +94,161 @@ const BROWSER_COMPATIBLE_CODECS: &[&str] = &["aac", "mp3", "flac", "opus", ...];
 - 多版本场景下用户体验更好（自动选最优版本而非保守选择）
 
 **优先级**：低（当前硬编码覆盖大多数场景）
+
+## 7. 内嵌字幕处理（飞牛 Range 抓取方案评估）
+
+**研究时间**：2026-02-22
+
+**飞牛客户端实现方式**：
+通过抓包发现，飞牛客户端**不通过专门的字幕 API** 获取内嵌字幕，而是：
+1. 通过 `media/range` HTTP Range 请求直接读取视频文件
+2. 先请求文件头（moov box 或 MKV Segment）解析字幕轨道位置和样本偏移表
+3. 再根据偏移表 Range 请求字幕数据段
+4. 客户端本地解码 SRT/ASS/PGS 并渲染
+
+**当前桥接项目的问题**：
+- 飞牛没有提供字幕提取 API
+- 我们的桥接层需要兼容 Jellyfin 的 `/Subtitles/{index}/Stream.vtt` 端点
+- 文本字幕（SRT/ASS）已支持（通过飞牛字幕接口或外挂字幕）
+- **内嵌字幕暂未支持**：Jellyfin Web 请求字幕时会失败
+
+### 方案 A：Bridge 层实现 Range 抓取（文本字幕）
+
+**技术实现**：
+```
+客户端请求 /Subtitles/{index}/Stream.vtt
+    ↓
+1. 查缓存 (media_guid, track_index) → 字幕数据偏移列表
+2. 无缓存：
+   a. Range 请求文件头（0-64KB 或 0-1MB）
+   b. 解析 MP4 moov box 或 MKV Segment/Tracks，定位字幕轨道
+   c. 提取样本偏移表（stsz/stco for MP4, Cluster/Block for MKV）
+   d. 缓存偏移列表
+3. Range 请求字幕数据段
+4. SRT/ASS 解码（UTF-8/GBK 检测）
+5. 时间轴转换，输出 WebVTT
+```
+
+**开发周期**（仅文本字幕，不含 PGS 位图）：
+
+| 模块 | 工作量 | 技术细节 |
+|------|--------|----------|
+| **MP4 解析** | 3-5 天 | `mp4parse` crate，读取 trak → mdia → minf → stbl → stsz/stco，处理 moov 在文件头或尾部的情况 |
+| **MKV 解析** | 5-7 天 | `matroska` crate，解析 Segment → Tracks → TrackEntry，定位 Cluster，处理 Cues 索引 |
+| **字幕缓存** | 2 天 | DashMap<(media_guid, track_id), Vec<(offset, size)>>，TTL 5分钟 |
+| **Range 请求** | 2 天 | 复用现有 `fnos_get_stream`，添加 Range header 支持 |
+| **SRT 转 WebVTT** | 1 天 | 时间格式 00:00:00,000 → 00:00:00.000 |
+| **ASS 转 WebVTT** | 2-3 天 | 解析 Events 段落，处理 Dialogue 行，丢弃样式，时间轴对齐 |
+| **编码检测** | 1-2 天 | `chardetng` 或 `encoding_rs` 检测 UTF-8/GBK/BIG5 |
+| **集成测试** | 2-3 天 | 不同工具封装的 MP4/MKV（ffmpeg、mkvtoolnix、HandBrake） |
+
+**总计：2-3 周**（只做 MP4 可缩短至 1.5-2 周）
+
+**运行时开销**：
+- 首次播放延迟：+100-300ms（下载文件头解析）
+- 内存占用：每片字幕索引约 50-200 字节（1000 条字幕约 100-200KB）
+- 并发：字幕 Range 请求和视频流并发
+
+**主要风险**：
+| 风险 | 影响 | 缓解措施 |
+|------|------|----------|
+| MKV Cluster 无索引 | 需要线性扫描找字幕位置，延迟高 | 只支持带 Cues 索引的 MKV |
+| 字幕编码非 UTF-8 | 中文乱码 | chardetng 自动检测 |
+| moov 在文件尾部 | 需要两次 Range | 首次请求最后 64KB |
+
+### 方案 B：标记不支持（当前状态）
+
+**实现**：在 `map_subtitle_stream()` 中检测内嵌字幕，设置：
+```rust
+"IsTextSubtitleStream": false,
+"SupportsExternalStream": false,
+// 不提供 DeliveryUrl
+```
+
+**效果**：Jellyfin Web 不显示内嵌字幕轨道，播放正常进行。
+
+**开发周期**：1 天
+
+### 对比与建议
+
+| 维度 | 方案 A（MP4 内嵌字幕） | 方案 B（禁用内嵌字幕） |
+|------|---------------------|-----------------------|
+| 开发周期 | **1.5-2 周** | 1 天 |
+| 覆盖面 | MP4 内嵌 SRT/ASS（约 70% 场景） | 无 |
+| 用户体验 | 内嵌字幕可用 | 需外挂字幕或飞牛客户端 |
+| 维护成本 | 高（容器格式兼容性） | 无 |
+
+**建议**：
+- **短期**：实施方案 B，保证播放稳定性
+- **中期**：根据用户反馈决定是否投入 1.5-2 周做 MP4 内嵌字幕（不做 MKV 和 PGS）
+- **长期**：推动飞牛官方提供字幕提取 API
+
+**相关代码**：
+- `bridge-rust/src/mappers/media.rs`：`map_subtitle_stream()` 函数
+- `bridge-rust/src/routes/stream.rs`：字幕流端点
+
+## 8. 字幕搜索下载（飞牛字幕库集成）
+
+**研究时间**：待研究（需抓包确认飞牛 API）
+
+**背景**：
+飞牛影视客户端支持从外部字幕库（射手网、字幕库等）搜索下载字幕。桥接项目目前不支持此功能，用户只能手动上传外挂字幕。
+
+**可能的实现方案**：
+
+### 方案 A：代理飞牛字幕搜索（推荐）
+**前提**：飞牛提供字幕搜索 API（需抓包确认）
+
+**假设的飞牛 API**（需验证）：
+```http
+# 搜索字幕
+POST /v/api/v1/subtitle/search
+{
+  "item_guid": "视频ID",
+  "language": "chi",
+  "format": "srt"
+}
+
+# 返回示例
+{
+  "subtitles": [
+    {"id": "xxx", "name": "xxx.srt", "language": "chi", "source": "shooter"}
+  ]
+}
+
+# 下载字幕
+POST /v/api/v1/subtitle/download
+{
+  "item_guid": "视频ID",
+  "subtitle_id": "xxx"
+}
+```
+
+**桥接实现**：
+1. 添加 `/Items/{itemId}/RemoteSearch/Subtitles` 端点
+2. 转发请求到飞牛字幕搜索 API
+3. 映射返回格式到 Jellyfin 的 RemoteSubtitleInfo
+4. 添加字幕下载端点，代理到飞牛下载 API
+
+**开发周期**：3-5 天（确认 API 后）
+
+### 方案 B：Jellyfin 原生字幕提供商
+**实现**：实现 Jellyfin 的 `ISubtitleProvider` 接口，集成飞牛字幕库
+
+**缺点**：
+- 复杂度高（1-2 周）
+- 需要适配 Jellyfin 插件架构
+
+**不建议**：桥接层应保持轻量，不应深入 Jellyfin 内部机制。
+
+### 当前状态
+- 未开始研究
+- 需抓包确认飞牛字幕搜索 API 的具体端点和参数
+
+**下一步**：
+1. 抓包飞牛客户端的字幕搜索请求
+2. 确认 API 端点、请求参数、返回格式
+3. 评估方案 A 可行性
+
+**相关代码**（Node 版参考）：
+- `bridge-node/src/routes/subtitles.ts`：字幕路由

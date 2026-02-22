@@ -119,7 +119,7 @@ fn map_subtitle_stream(ss: &serde_json::Value, index: i32) -> serde_json::Value 
         "IsInterlaced": false,
         "IsDefault": is_default,
         "IsForced": ss["forced"].as_i64().unwrap_or(0) == 1,
-        "IsExternal": ss["is_external"].as_i64().unwrap_or(0) == 1,
+        "IsExternal": true,  // 只处理外挂字幕
         "Type": "Subtitle",
         "Index": index,
         "Title": if title.is_empty() { serde_json::Value::Null } else { json!(title) },
@@ -166,19 +166,25 @@ fn build_single_media_source(
         }
     }
 
-    // 字幕流
+    // 字幕流 - 仅保留外挂字幕（内嵌字幕需 Range 抓取文件解析，开发成本高，暂不实现）
     for ss in subtitle_streams {
+        let is_external = ss["is_external"].as_i64().unwrap_or(0) == 1;
+        
+        // 跳过内嵌字幕，只处理外挂字幕
+        if !is_external {
+            continue;
+        }
+        
         let sub_index = stream_index;
         stream_index += 1;
         let mut sub_stream = map_subtitle_stream(ss, sub_index);
 
-        if sub_stream["IsTextSubtitleStream"].as_bool().unwrap_or(false) {
-            sub_stream["DeliveryMethod"] = json!("External");
-            sub_stream["DeliveryUrl"] = json!(format!(
-                "/Videos/{}/{}/Subtitles/{}/Stream.vtt",
-                media_guid, media_guid, sub_index
-            ));
-        }
+        // 外挂字幕支持外部流传输
+        sub_stream["DeliveryMethod"] = json!("External");
+        sub_stream["DeliveryUrl"] = json!(format!(
+            "/Videos/{}/{}/Subtitles/{}/Stream.vtt",
+            media_guid, media_guid, sub_index
+        ));
 
         media_streams.push(sub_stream);
 
@@ -194,7 +200,7 @@ fn build_single_media_source(
                         .or_else(|| ss["format"].as_str())
                         .unwrap_or("srt")
                         .to_string(),
-                    is_external: ss["is_external"].as_i64().unwrap_or(0) == 1,
+                    is_external: true,
                 });
             }
         }
