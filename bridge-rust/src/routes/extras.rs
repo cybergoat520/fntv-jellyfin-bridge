@@ -2,7 +2,7 @@
 
 use axum::{
     extract::{Path, State},
-    routing::{delete, get, post},
+    routing::post,
     Json, Router,
 };
 use tracing::{debug, warn};

@@ -35,6 +35,7 @@ pub fn router() -> Router<BridgeConfig> {
 #[derive(Deserialize, Default)]
 struct SeasonsQuery {
     #[serde(rename = "UserId")]
+    #[allow(dead_code)]
     user_id: Option<String>,
 }
 
@@ -45,6 +46,7 @@ struct EpisodesQuery {
     #[serde(rename = "Season")]
     season: Option<i32>,
     #[serde(rename = "UserId")]
+    #[allow(dead_code)]
     user_id: Option<String>,
     #[serde(rename = "StartIndex")]
     start_index: Option<i64>,

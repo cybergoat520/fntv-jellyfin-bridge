@@ -5,7 +5,7 @@ use axum::{
     body::Body,
     extract::{
         ws::{Message, WebSocket},
-        State, WebSocketUpgrade,
+        WebSocketUpgrade,
     },
     http::StatusCode,
     response::{IntoResponse, Redirect, Response},
@@ -206,6 +206,7 @@ async fn redirect_user_views(
     Redirect::temporary(&format!("/UserViews{}", query))
 }
 
+#[allow(dead_code)]
 async fn redirect_user_resume(
     axum::extract::Path(_uid): axum::extract::Path<String>,
     req: axum::extract::Request,
@@ -252,6 +253,7 @@ async fn web_redirect_or_index() -> Response {
     }
 }
 
+#[allow(dead_code)]
 async fn web_index() -> Response {
     // 检查 web 目录是否存在
     let web_dir = std::path::Path::new("web");

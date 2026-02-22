@@ -11,7 +11,7 @@ use axum::{
 };
 use reqwest::Client;
 use serde::Deserialize;
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 
 use crate::config::BridgeConfig;
 use crate::fnos_client::signature::generate_authx_string;

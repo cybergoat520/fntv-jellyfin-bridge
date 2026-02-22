@@ -222,33 +222,29 @@ fn build_single_media_source(
     if let Some(vs) = video_streams.first() {
         tracing::debug!("[MEDIA] video_stream[0]: {}", vs);
     }
-    let mut display_name = if !file_name.is_empty() {
-        file_name.to_string()
-    } else {
-        "Video".to_string()
-    };
-    if let Some(vs) = vs0 {
+    let display_name = if let Some(vs) = vs0 {
         let codec = vs["codec_name"].as_str().unwrap_or("");
         let height = vs["height"].as_i64().unwrap_or(0);
         if codec.is_empty() && height == 0 {
             // 远程文件：视频流信息为空
-            display_name = format_remote_file_name(file_info);
+            format_remote_file_name(file_info)
         } else {
-            display_name = format_video_title(vs);
+            let mut name = format_video_title(vs);
             if let Some(fi) = file_info {
                 if let Some(size) = fi["size"].as_i64() {
                     let size_mb = size / 1024 / 1024;
                     if size_mb > 1024 {
-                        display_name = format!("{} ({:.1}GB)", display_name, size_mb as f64 / 1024.0);
+                        name = format!("{} ({:.1}GB)", name, size_mb as f64 / 1024.0);
                     } else {
-                        display_name = format!("{} ({}MB)", display_name, size_mb);
+                        name = format!("{} ({}MB)", name, size_mb);
                     }
                 }
             }
+            name
         }
     } else {
-        display_name = format_remote_file_name(file_info);
-    }
+        format_remote_file_name(file_info)
+    };
 
     // 检测是否需要转码
     let has_compatible_audio = audio_streams.iter().any(|a| {

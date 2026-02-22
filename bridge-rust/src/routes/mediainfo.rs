@@ -9,7 +9,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::json;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use crate::cache::stream_list::cached_get_stream_list;
 use crate::config::BridgeConfig;

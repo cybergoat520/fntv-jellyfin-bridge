@@ -18,7 +18,7 @@ use crate::services::fnos::fnos_login;
 use crate::services::session::{create_session, SessionData};
 use crate::types::fnos::FnosUserInfo;
 use crate::types::jellyfin::{
-    AuthenticationResult, JellyfinAuthHeader, PlayStateInfo, SessionInfoDto,
+    AuthenticationResult, PlayStateInfo, SessionInfoDto,
 };
 
 pub fn router() -> Router<BridgeConfig> {

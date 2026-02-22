@@ -3,7 +3,7 @@
 
 use reqwest::Client;
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tracing::{debug, warn};
 
 use super::signature::{generate_authx_string, generate_nonce};
