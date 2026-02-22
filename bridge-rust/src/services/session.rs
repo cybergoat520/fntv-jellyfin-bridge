@@ -21,7 +21,20 @@ pub struct SessionData {
     pub app_version: String,
     pub created_at: i64,
     pub last_activity: i64,
+    #[serde(default)]
+    pub access_token: String,
 }
+
+/// 正在播放状态
+#[derive(Debug, Clone)]
+pub struct NowPlayingState {
+    pub item_id: String,
+    pub position_ticks: i64,
+    pub is_paused: bool,
+}
+
+/// access_token → NowPlayingState（内存级，不持久化）
+static NOW_PLAYING: LazyLock<DashMap<String, NowPlayingState>> = LazyLock::new(DashMap::new);
 
 static SESSIONS: LazyLock<DashMap<String, SessionData>> = LazyLock::new(|| {
     let map = DashMap::new();
@@ -91,6 +104,7 @@ pub fn create_session(
             app_version,
             created_at: now,
             last_activity: now,
+            access_token: access_token.clone(),
         },
     );
     save_sessions();
@@ -101,7 +115,12 @@ pub fn create_session(
 pub fn get_session(access_token: &str) -> Option<SessionData> {
     let mut entry = SESSIONS.get_mut(access_token)?;
     entry.last_activity = now_millis();
-    Some(entry.value().clone())
+    // 确保 access_token 字段有值（兼容旧持久化数据）
+    let mut data = entry.value().clone();
+    if data.access_token.is_empty() {
+        data.access_token = access_token.to_string();
+    }
+    Some(data)
 }
 
 /// 删除会话
@@ -109,6 +128,7 @@ pub fn remove_session(access_token: &str) -> bool {
     let result = SESSIONS.remove(access_token).is_some();
     if result {
         save_sessions();
+        NOW_PLAYING.remove(access_token);
     }
     result
 }
@@ -116,4 +136,27 @@ pub fn remove_session(access_token: &str) -> bool {
 /// 获取所有活跃会话数
 pub fn get_session_count() -> usize {
     SESSIONS.len()
+}
+
+/// 设置正在播放状态
+pub fn set_now_playing(token: &str, state: NowPlayingState) {
+    NOW_PLAYING.insert(token.to_string(), state);
+}
+
+/// 更新播放进度
+pub fn update_now_playing_progress(token: &str, position_ticks: i64, is_paused: bool) {
+    if let Some(mut entry) = NOW_PLAYING.get_mut(token) {
+        entry.position_ticks = position_ticks;
+        entry.is_paused = is_paused;
+    }
+}
+
+/// 清除正在播放状态
+pub fn clear_now_playing(token: &str) {
+    NOW_PLAYING.remove(token);
+}
+
+/// 获取正在播放状态
+pub fn get_now_playing(token: &str) -> Option<NowPlayingState> {
+    NOW_PLAYING.get(token).map(|v| v.clone())
 }

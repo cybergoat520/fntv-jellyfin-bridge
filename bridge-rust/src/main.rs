@@ -80,7 +80,7 @@ fn build_router(config: BridgeConfig) -> Router {
         .route("/Sessions/Capabilities", post(no_content))
         .route("/Sessions/Capabilities/Full", post(no_content))
         // Sessions 列表
-        .route("/Sessions", get(sessions_list))
+        .route("/Sessions", get(sessions_list).layer(axum::middleware::from_fn(fnos_bridge::middleware::auth::require_auth)))
         // Localization
         .route("/Localization/Countries", get(empty_array))
         .route("/Localization/Cultures", get(empty_array))
@@ -142,20 +142,42 @@ async fn empty_items() -> Json<serde_json::Value> {
     Json(json!({"Items": [], "TotalRecordCount": 0, "StartIndex": 0}))
 }
 
-async fn sessions_list() -> Json<serde_json::Value> {
-    Json(json!([{
-        "Id": "dummy-session",
-        "UserId": "",
-        "UserName": "",
-        "Client": "",
-        "DeviceId": "",
-        "DeviceName": "",
-        "ApplicationVersion": "",
+async fn sessions_list(req: axum::extract::Request) -> Json<serde_json::Value> {
+    use fnos_bridge::services::session::{SessionData, get_now_playing};
+
+    let session = req.extensions().get::<SessionData>().cloned().unwrap();
+    let now_playing = get_now_playing(&session.access_token);
+
+    let mut s = json!({
+        "Id": session.access_token,
+        "UserId": session.user_id,
+        "UserName": session.username,
+        "Client": session.client,
+        "DeviceId": session.device_id,
+        "DeviceName": session.device_name,
+        "ApplicationVersion": session.app_version,
         "IsActive": true,
         "SupportsRemoteControl": false,
-        "PlayState": { "CanSeek": true, "IsPaused": false, "IsMuted": false },
-        "TranscodingInfo": { "IsVideoDirect": true, "IsAudioDirect": false }
-    }]))
+    });
+
+    if let Some(np) = now_playing {
+        s["NowPlayingItem"] = json!({ "Id": np.item_id });
+        s["PlayState"] = json!({
+            "CanSeek": true,
+            "IsPaused": np.is_paused,
+            "IsMuted": false,
+            "PlayMethod": "Transcode",
+            "PositionTicks": np.position_ticks,
+        });
+    } else {
+        s["PlayState"] = json!({
+            "CanSeek": false,
+            "IsPaused": true,
+            "IsMuted": false,
+        });
+    }
+
+    Json(json!([s]))
 }
 
 async fn display_prefs(

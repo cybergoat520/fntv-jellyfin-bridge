@@ -18,7 +18,7 @@ use crate::middleware::auth::require_auth;
 use crate::services::fnos::{fnos_get_play_info, fnos_record_play_status};
 use crate::services::hls_session::{get_hls_play_link, get_stream_meta};
 use crate::cache::item_list::update_item_progress;
-use crate::services::session::SessionData;
+use crate::services::session::{SessionData, NowPlayingState, set_now_playing, update_now_playing_progress, clear_now_playing};
 
 /// 播放信息缓存
 struct PlayInfoCacheEntry {
@@ -99,10 +99,30 @@ async fn handle_play_report(
         Err(_) => json!({}),
     };
 
-    let item_id = body["ItemId"].as_str().unwrap_or("");
+    let item_id = body["ItemId"].as_str().unwrap_or("").to_string();
     let position_ticks = body["PositionTicks"].as_i64().unwrap_or(0);
+    let is_paused = body["IsPaused"].as_bool().unwrap_or(false);
 
-    let fnos_guid = to_fnos_guid(item_id).unwrap_or_default();
+    // 更新正在播放状态
+    let token = &session.access_token;
+    match event {
+        "start" => {
+            set_now_playing(token, NowPlayingState {
+                item_id: item_id.clone(),
+                position_ticks,
+                is_paused,
+            });
+        }
+        "progress" => {
+            update_now_playing_progress(token, position_ticks, is_paused);
+        }
+        "stopped" => {
+            clear_now_playing(token);
+        }
+        _ => {}
+    }
+
+    let fnos_guid = to_fnos_guid(&item_id).unwrap_or_default();
     if fnos_guid.is_empty() {
         return axum::http::StatusCode::NO_CONTENT;
     }
