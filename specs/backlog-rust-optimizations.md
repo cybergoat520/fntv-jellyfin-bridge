@@ -25,3 +25,32 @@
 ## 4. ~~Windows 本地编译支持~~
 
 已解决 — Visual Studio Build Tools 安装后可正常编译。
+
+## 5. 路径规范化优化
+
+**现状**：当前实现了大小写规范化（如 `/system/info/public` → `/System/Info/Public`），但未实现双斜杠规范化。bridge-node 版本有双斜杠处理（`//System/Info` → `/System/Info`），但 bridge-rust 没有。
+
+**背景**：
+- 标准客户端（jellyfin-web、Xbox、Android 等）都会发送正确的路径
+- 大小写规范化是容错处理，防止第三方客户端或手动请求出错
+- 双斜杠规范化在 bridge-node 中是为 Xbox 添加的，但实际上 Xbox 也不会产生双斜杠路径
+
+**方案选项**：
+
+**选项 A - 保持现状**：
+- 维持现有大小写规范化
+- 不添加双斜杠处理（因为没有实际需求）
+- 移除相关的测试代码（已移到 `path-normalization.test.ts`，可删除）
+
+**选项 B - 完整实现**：
+- 在 `normalize_path` 中添加双斜杠处理：
+  ```rust
+  let path = path.replace("//", "/");
+  ```
+- 统一处理所有非标准路径变体
+
+**选项 C - 移除大小写规范化**：
+- 如果确认所有客户端都使用正确的大小写，可以移除该功能简化代码
+- 需要充分测试各主流客户端（jellyfin-web、Xbox、Android、iOS）
+
+**建议**：选项 A（保持现状），因为没有实际场景需要双斜杠支持，且大小写规范化对容错有帮助。`path-normalization.test.ts` 中的测试可以保留作为回归测试，但标记为可选/容错性质。

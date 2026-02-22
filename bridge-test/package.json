@@ -18,7 +18,9 @@
     "test:favorites": "node --test tests/favorites.test.ts",
     "test:resume": "node --test tests/resume.test.ts",
     "test:misc": "node --test tests/misc.test.ts",
-    "test:cache": "node --test tests/cache-sync.test.ts"
+    "test:cache": "node --test tests/cache-sync.test.ts",
+    "test:xbox": "node --test tests/xbox-compat.test.ts",
+    "test:path": "node --test tests/path-normalization.test.ts"
   },
   "dependencies": {
     "axios": "^1.7.0"

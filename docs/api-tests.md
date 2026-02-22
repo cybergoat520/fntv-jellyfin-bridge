@@ -18,8 +18,10 @@
 | Resume API | resume.test.ts | 6 |
 | Favorites API | favorites.test.ts | 4 |
 | Cache Sync API | cache-sync.test.ts | 9 |
+| Xbox Compatibility API | xbox-compat.test.ts | 7 |
+| Path Normalization API | path-normalization.test.ts | 6 |
 | Misc API | misc.test.ts | 18 |
-| **总计** | **13 个文件** | **121 个用例** |
+| **总计** | **15 个文件** | **134 个用例** |
 
 ## 运行测试
 
@@ -240,6 +242,46 @@ npm test -- --test-name-pattern "System"    # 运行指定测试
 | `/Sessions/Playing/*` | POST | 是 | 多次播放上报应正常工作（PlayInfo缓存） |
 | `/Sessions/Playing/*` | POST | 是 | 混合播放事件上报应正常工作 |
 | `/Items/Latest` | GET | 是 | 最近添加列表应正确返回 |
+
+---
+
+## Xbox Compatibility API
+
+Xbox 客户端兼容性测试，针对 Xbox Jellyfin 客户端的特殊行为。
+
+| 端点 | 方法 | 认证 | 测试内容 |
+|------|------|------|----------|
+| `/` | HEAD | 否 | HEAD / 根路径探测应返回 200 或重定向到 /web/ |
+| `/` | GET | 否 | GET / 应该重定向到 /web/ |
+| `/Users/Me` | GET | 是 | 应该支持只有 Token 的 MediaBrowser 格式 |
+| `/Users/Me` | GET | 是 | 应该支持 X-MediaBrowser-Token 头 |
+| `/System/Info/Public` | GET | 否 | 应该接受 Xbox User-Agent 请求 |
+| `/web` | GET | 否 | /web 应该重定向到 /web/ |
+| `/web/` | GET | 否 | /web/ 应该返回 200 |
+
+### Xbox 兼容性问题说明
+
+1. **HEAD / 重定向问题** - Xbox 客户端启动时会发送 HEAD / 探测服务器，需要返回重定向到 /web/，否则 Xbox 会拼错 API 路径
+2. **认证格式** - Xbox 客户端可能使用只有 Token 的 `MediaBrowser Token="..."` 格式（无 Client、Device 等字段）
+
+---
+
+## Path Normalization API
+
+路径规范化测试，验证服务器对非标准路径的容错处理能力。
+
+| 端点 | 方法 | 认证 | 测试内容 |
+|------|------|------|----------|
+| `/system/info/public` | GET | 否 | 应该处理全小写路径 |
+| `/SYSTEM/INFO/PUBLIC` | GET | 否 | 应该处理全大写路径 |
+| `/System/Info/Public` | GET | 否 | 应该处理混合大小写路径 |
+| `/SYSTEM/Info/Public` | GET | 否 | 应该处理混合大小写路径 |
+| `/userviews` | GET | 是 | 应该处理小写的 /userviews |
+| `/branding/configuration` | GET | 否 | 应该处理小写的 /branding/configuration |
+
+### 说明
+
+这些测试验证服务器对非标准路径的容错能力。标准客户端（jellyfin-web、Xbox、Android 等）都会使用正确的路径大小写（如 `/System/Info/Public`）。
 
 ### 缓存机制说明
 

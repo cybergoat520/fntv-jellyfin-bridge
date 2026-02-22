@@ -38,6 +38,8 @@ npm run test:items       # 媒体项目 API
 npm run test:playback    # 播放状态 API
 npm run test:stream      # 视频流 API
 npm run test:cache       # 缓存同步测试
+npm run test:xbox        # Xbox 客户端兼容性测试
+npm run test:path        # 路径规范化测试
 ```
 
 ## 测试覆盖
@@ -82,6 +84,8 @@ bridge-test/
 │   ├── favorites.test.ts     # Favorites API 测试
 │   ├── resume.test.ts        # Resume API 测试
 │   ├── cache-sync.test.ts    # 缓存同步测试
+│   ├── xbox-compat.test.ts   # Xbox 客户端兼容性测试
+│   ├── path-normalization.test.ts # 路径规范化测试
 │   └── misc.test.ts          # 其他端点测试
 └── README.md             # 本文档
 ```
