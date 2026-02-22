@@ -17,7 +17,7 @@ use crate::mappers::item::ticks_to_seconds;
 use crate::middleware::auth::require_auth;
 use crate::services::fnos::{fnos_get_play_info, fnos_record_play_status};
 use crate::services::hls_session::{get_hls_play_link, get_stream_meta};
-use crate::services::item_list_cache::update_item_progress;
+use crate::cache::item_list::update_item_progress;
 use crate::services::session::SessionData;
 
 /// 播放信息缓存

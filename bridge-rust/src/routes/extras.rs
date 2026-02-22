@@ -11,7 +11,7 @@ use crate::config::BridgeConfig;
 use crate::mappers::id::to_fnos_guid;
 use crate::middleware::auth::require_auth;
 use crate::services::fnos::{fnos_get_play_info, fnos_set_favorite, fnos_set_watched};
-use crate::services::item_list_cache::update_item_from_play_info;
+use crate::cache::item_list::update_item_from_play_info;
 use crate::services::session::SessionData;
 use crate::types::jellyfin::UserItemDataDto;
 

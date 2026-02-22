@@ -11,6 +11,7 @@ use serde::Deserialize;
 use serde_json::json;
 use tracing::{debug, info, warn};
 
+use crate::cache::stream_list::cached_get_stream_list;
 use crate::config::BridgeConfig;
 use crate::mappers::id::*;
 use crate::mappers::media::build_media_sources;
@@ -99,8 +100,8 @@ async fn playback_info(
 
     let play_info = play_result.data.unwrap();
 
-    // 获取流列表
-    let stream_result = fnos_get_stream_list(
+    // 获取流列表（使用缓存）
+    let stream_result = cached_get_stream_list(
         &session.fnos_server,
         &session.fnos_token,
         &fnos_guid,

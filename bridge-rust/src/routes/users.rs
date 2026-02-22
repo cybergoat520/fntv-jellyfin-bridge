@@ -13,7 +13,8 @@ use crate::config::BridgeConfig;
 use crate::mappers::id::{generate_server_id, to_jellyfin_id};
 use crate::mappers::user::map_user_to_jellyfin;
 use crate::middleware::auth::require_auth;
-use crate::services::fnos::{fnos_get_user_info, fnos_login};
+use crate::cache::user_info::cached_get_user_info;
+use crate::services::fnos::fnos_login;
 use crate::services::session::{create_session, SessionData};
 use crate::types::fnos::FnosUserInfo;
 use crate::types::jellyfin::{
@@ -113,7 +114,7 @@ async fn authenticate_by_name(
         nickname: body.username.clone(),
         ..Default::default()
     };
-    let result = fnos_get_user_info(&actual_server, &token, &config).await;
+    let result = cached_get_user_info(&actual_server, &token, &config).await;
     if result.success {
         if let Some(data) = result.data {
             user_info = data;
@@ -183,7 +184,7 @@ async fn users_me(
         ..Default::default()
     };
 
-    let result = fnos_get_user_info(&session.fnos_server, &session.fnos_token, &config).await;
+    let result = cached_get_user_info(&session.fnos_server, &session.fnos_token, &config).await;
     if result.success {
         if let Some(data) = result.data {
             user_info = data;
@@ -216,7 +217,7 @@ async fn users_by_id(
         ..Default::default()
     };
 
-    let result = fnos_get_user_info(&session.fnos_server, &session.fnos_token, &config).await;
+    let result = cached_get_user_info(&session.fnos_server, &session.fnos_token, &config).await;
     if result.success {
         if let Some(data) = result.data {
             user_info = data;

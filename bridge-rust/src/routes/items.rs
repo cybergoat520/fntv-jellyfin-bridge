@@ -14,8 +14,9 @@ use crate::mappers::id::*;
 use crate::mappers::item::*;
 use crate::mappers::media::build_media_sources;
 use crate::middleware::auth::require_auth;
+use crate::cache::item_list::cached_get_item_list;
+use crate::cache::stream_list::cached_get_stream_list;
 use crate::services::fnos::*;
-use crate::services::item_list_cache::cached_get_item_list;
 use crate::services::session::SessionData;
 use crate::types::jellyfin::{BaseItemDto, ItemsResult};
 
@@ -510,7 +511,7 @@ async fn build_item_response(
 
     // 对可播放项目，获取流信息并附加 MediaSources
     if dto.media_type.as_deref() == Some("Video") && !play_info.media_guid.is_empty() {
-        let result = fnos_get_stream_list(
+        let result = cached_get_stream_list(
             &session.fnos_server,
             &session.fnos_token,
             fnos_guid,

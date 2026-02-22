@@ -4,7 +4,7 @@
 use base64::Engine;
 use crate::types::fnos::{FnosPlayInfo, FnosPlayListItem};
 use crate::types::jellyfin::{BaseItemDto, UserItemDataDto};
-use crate::services::image_cache::{set_image_cache, CachedImage};
+use crate::cache::image::{set_image_cache, CachedImage};
 use super::id::{to_jellyfin_id, register_item_type};
 
 /// 秒 → Jellyfin ticks (1 tick = 100ns)

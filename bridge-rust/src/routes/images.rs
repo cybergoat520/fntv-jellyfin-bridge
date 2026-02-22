@@ -16,7 +16,7 @@ use crate::fnos_client::signature::generate_authx_string;
 use crate::mappers::id::to_fnos_guid;
 use crate::middleware::auth::optional_auth;
 use crate::services::fnos::fnos_get_play_info;
-use crate::services::image_cache::{get_image_cache, set_image_cache, CachedImage};
+use crate::cache::image::{get_image_cache, set_image_cache, CachedImage};
 use crate::services::session::SessionData;
 
 pub fn router() -> Router<BridgeConfig> {
