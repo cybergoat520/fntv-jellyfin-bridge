@@ -2,27 +2,19 @@
 
 可以做但不紧急的优化，按需推进。
 
-## 1. stream/list 和 play/info 请求缓存
+## ~~1. stream/list 和 play/info 请求缓存~~ ✅
 
-**现状**：`item_list_cache` 只缓存了列表请求（`/v/api/v1/item/list`），但 `stream/list` 和 `play/info` 没有缓存。打开一个详情页会触发两次相同的 `stream/list` 请求（items_detail + mediainfo/PlaybackInfo）。
+已实现（bf19f86）— `cached_get_stream_list` + `cached_get_user_info` TTL 缓存。
 
-**方案**：给 `fnos_get_stream_list` 和 `fnos_get_play_info` 加类似 `item_list_cache` 的 TTL 缓存 + 并发去重。
+## ~~2. user/info 请求合并~~ ✅
 
-**影响**：减少飞牛 API 请求量，加快详情页加载。
+已实现（bf19f86）— session 层 user_info 缓存。
 
-## 2. user/info 请求合并
+## ~~3. fnos_client 日志级别调整~~ ✅
 
-**现状**：每个需要认证的请求都会调一次 `/v/api/v1/user/info`，首页加载时会并发 4-5 次相同请求。
+已实现（adc58f4）— 日志级别重构。
 
-**方案**：在 session 层缓存 user info，TTL 内不重复请求。
-
-## 3. fnos_client 日志级别调整
-
-**现状**：所有 `[FNOS] POST/GET ...` 日志都是 `info` 级别，生产环境日志量大。
-
-**方案**：改为 `debug`，只在需要时通过 `RUST_LOG=info,fnos_bridge::fnos_client=debug` 开启。
-
-## 4. ~~Windows 本地编译支持~~
+## ~~4. Windows 本地编译支持~~ ✅
 
 已解决 — Visual Studio Build Tools 安装后可正常编译。
 
@@ -95,7 +87,7 @@ const BROWSER_COMPATIBLE_CODECS: &[&str] = &["aac", "mp3", "flac", "opus", ...];
 
 **优先级**：低（当前硬编码覆盖大多数场景）
 
-## 7. 内嵌字幕处理（飞牛 Range 抓取方案评估）
+## 7. 内嵌字幕处理（飞牛 Range 抓取方案评估）— 方案 B 已实施 ✅
 
 **研究时间**：2026-02-22
 
@@ -156,7 +148,7 @@ const BROWSER_COMPATIBLE_CODECS: &[&str] = &["aac", "mp3", "flac", "opus", ...];
 | 字幕编码非 UTF-8 | 中文乱码 | chardetng 自动检测 |
 | moov 在文件尾部 | 需要两次 Range | 首次请求最后 64KB |
 
-### 方案 B：标记不支持（当前状态）
+### 方案 B：标记不支持（✅ 当前已实施，42d49b9）
 
 **实现**：在 `map_subtitle_stream()` 中检测内嵌字幕，设置：
 ```rust
@@ -252,3 +244,75 @@ POST /v/api/v1/subtitle/download
 
 **相关代码**（Node 版参考）：
 - `bridge-node/src/routes/subtitles.ts`：字幕路由
+
+## 9. PlaybackInfo 完整 body 解析 + StartTimeTicks 支持
+
+**研究时间**：2026-02-22
+
+**背景**：
+jellyfin-web 在切换音频/字幕/质量时，会 POST `/Items/{itemId}/PlaybackInfo`，body 包含完整的播放参数。当前 bridge-rust 只解析了部分字段。
+
+**实际抓包的 PlaybackInfo body**：
+```json
+{
+  "UserId": "6ed3f552-98cf-5eab-912b-2d493de87625",
+  "StartTimeTicks": 510000000,
+  "IsPlayback": true,
+  "AutoOpenLiveStream": true,
+  "AudioStreamIndex": "1",
+  "SubtitleStreamIndex": "-1",
+  "MediaSourceId": "08523386ed554328a14bc4845f0fb42c",
+  "MaxStreamingBitrate": 40000000,
+  "AlwaysBurnInSubtitleWhenTranscoding": false,
+  "DeviceProfile": {
+    "MaxStreamingBitrate": 120000000,
+    "MaxStaticBitrate": 100000000,
+    "MusicStreamingTranscodingBitrate": 384000,
+    "DirectPlayProfiles": [
+      {"Container": "webm", "Type": "Video", "VideoCodec": "vp8,vp9,av1", "AudioCodec": "vorbis,opus"},
+      {"Container": "mp4,m4v", "Type": "Video", "VideoCodec": "h264,hevc,vp9,av1", "AudioCodec": "aac,mp3,ac3,eac3,flac,alac,vorbis,opus,dts"},
+      ...
+    ],
+    "CodecProfiles": [...],
+    "TranscodingProfiles": [...]
+  }
+}
+```
+
+**注意**：`AudioStreamIndex` 和 `SubtitleStreamIndex` 是**字符串**（`"1"`、`"-1"`），不是数字！已通过 lenient 反序列化修复。
+
+**当前已解析的字段**：
+- `MediaSourceId` ✓
+- `AudioStreamIndex` ✓（lenient 反序列化）
+- `SubtitleStreamIndex` ✓（lenient 反序列化）
+- `MaxStreamingBitrate` ✓（lenient 反序列化）
+- `EnableDirectPlay` ✓（lenient 反序列化）
+- `EnableDirectStream` ✓（lenient 反序列化）
+
+**待实现**：
+
+### 9a. StartTimeTicks → HLS 转码起始位置
+**现状**：切换音频走 HLS 转码时，`get_or_create_hls_session` 的 `startTimestamp` 固定为 0，导致从头开始转码。
+**方案**：
+1. `PlaybackInfoDto` 加 `StartTimeTicks` 字段
+2. `StreamMeta` 加 `start_timestamp: f64`（秒）
+3. `get_or_create_hls_session` 使用 `meta.start_timestamp` 传给飞牛 `play/play`
+4. ticks → 秒转换：`start_time_ticks / 10_000_000.0`
+
+**开发周期**：0.5 天
+
+### 9b. DeviceProfile 解析（见 backlog #6）
+**现状**：`DeviceProfile` 包含客户端支持的编解码器列表，可用于精确判断 `SupportsDirectStream`。
+**方案**：见 backlog #6
+
+### 9c. SubtitleStreamIndex 处理
+**现状**：已解析但未使用。
+**方案**：
+1. 根据 `SubtitleStreamIndex` 更新 `DefaultSubtitleStreamIndex`
+2. 如果字幕需要转码（如 PGS → 烧录），影响 HLS 转码参数
+
+**开发周期**：1 天
+
+**相关代码**：
+- `bridge-rust/src/routes/mediainfo.rs`：`PlaybackInfoDto` 结构体
+- `bridge-rust/src/services/hls_session.rs`：`StreamMeta` 和 `get_or_create_hls_session`

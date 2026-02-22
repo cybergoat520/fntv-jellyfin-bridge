@@ -4,7 +4,7 @@ use dashmap::DashMap;
 use regex::Regex;
 use serde_json::json;
 use std::sync::LazyLock;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::config::BridgeConfig;
 use crate::services::fnos::fnos_start_play;
@@ -83,7 +83,11 @@ pub async fn get_or_create_hls_session(
     let meta = STREAM_META_MAP.get(media_guid)?;
     let meta = meta.value().clone();
 
-    info!("[HLS] 启动转码会话: mediaGuid={}", media_guid);
+    info!("[HLS] 启动转码会话");
+    debug!(
+        "[HLS] mediaGuid={}, audio_guid={}, audio_encoder={}, channels={}",
+        media_guid, meta.audio_guid, meta.audio_encoder, meta.channels
+    );
 
     let result = fnos_start_play(
         server,
@@ -135,7 +139,7 @@ pub async fn get_or_create_hls_session(
         },
     );
 
-    info!(
+    debug!(
         "[HLS] 转码会话已创建: mediaGuid={} → sessionGuid={}",
         media_guid, session_guid
     );
