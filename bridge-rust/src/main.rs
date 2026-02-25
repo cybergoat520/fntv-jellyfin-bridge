@@ -30,6 +30,9 @@ async fn main() {
         )
         .init();
 
+    // 启动前检查并解压 web.zip
+    extract_web_zip_if_needed();
+
     let config = BridgeConfig::from_env();
 
     println!(
@@ -360,6 +363,53 @@ async fn handle_ws(mut socket: WebSocket) {
             }
         }
     }
+}
+
+// --- web.zip 自动解压 ---
+
+fn extract_web_zip_if_needed() {
+    let zip_path = std::path::Path::new("web.zip");
+    if !zip_path.exists() {
+        return;
+    }
+
+    println!("发现 web.zip，开始更新 web 目录...");
+
+    // 1. 删除旧的 web 目录
+    let web_dir = std::path::Path::new("web");
+    if web_dir.exists() {
+        if let Err(e) = std::fs::remove_dir_all(web_dir) {
+            eprintln!("删除 web 目录失败: {}", e);
+            return;
+        }
+    }
+
+    // 2. 解压 web.zip 到 web 目录
+    let file = match std::fs::File::open(zip_path) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("无法打开 web.zip: {}", e);
+            return;
+        }
+    };
+    let mut archive = match zip::ZipArchive::new(file) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("无法解析 web.zip: {}", e);
+            return;
+        }
+    };
+    if let Err(e) = archive.extract("web") {
+        eprintln!("解压 web.zip 失败: {}", e);
+        return;
+    }
+
+    // 3. 删除 web.zip
+    if let Err(e) = std::fs::remove_file(zip_path) {
+        eprintln!("删除 web.zip 失败: {}", e);
+    }
+
+    println!("web 目录更新完成");
 }
 
 // --- 路径大小写规范化 ---

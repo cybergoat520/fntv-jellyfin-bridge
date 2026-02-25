@@ -14,7 +14,7 @@ use tracing::{debug, error, warn};
 use crate::cache::stream_list::cached_get_stream_list;
 use crate::config::BridgeConfig;
 use crate::mappers::id::*;
-use crate::mappers::media::build_media_sources;
+use crate::mappers::media::{build_media_sources, get_subtitle_info};
 use crate::middleware::auth::{extract_token, require_auth};
 use crate::services::fnos::*;
 use crate::services::hls_session::{clear_hls_session, register_stream_meta, StreamMeta};
@@ -147,6 +147,7 @@ async fn playback_info(
 
     let requested_media_source_id = body.media_source_id.unwrap_or_default();
     let audio_stream_index = body.audio_stream_index;
+    let subtitle_stream_index = body.subtitle_stream_index;
     let max_streaming_bitrate = body.max_streaming_bitrate;
     let enable_direct_play = body.enable_direct_play;
     let enable_direct_stream = body.enable_direct_stream;
@@ -295,6 +296,27 @@ async fn playback_info(
                 audio["codec_name"].as_str().unwrap_or("?"),
                 audio["channels"].as_i64().unwrap_or(0),
             );
+            // 字幕匹配：根据 SubtitleStreamIndex 查找内置字幕的飞牛 guid
+            let mut selected_subtitle_guid = String::new();
+            if let Some(req_sub_idx) = subtitle_stream_index {
+                if req_sub_idx >= 0 {
+                    if let Some(sub_info) = get_subtitle_info(&ms_id, req_sub_idx) {
+                        if !sub_info.is_external {
+                            selected_subtitle_guid = sub_info.guid.clone();
+                            debug!(
+                                "  [SUB-MATCH] ✓ 内置字幕: guid={}, lang={}",
+                                sub_info.guid, sub_info.language
+                            );
+                        }
+                    }
+                }
+            }
+
+            // 字幕变更时清除旧的 HLS 会话，以便创建包含新字幕的转码会话
+            if !selected_subtitle_guid.is_empty() {
+                clear_hls_session(&ms_id);
+            }
+
             register_stream_meta(
                 &ms_id,
                 StreamMeta {
@@ -306,7 +328,7 @@ async fn playback_info(
                     bitrate: vs["bps"].as_i64().unwrap_or(15_000_000),
                     audio_encoder: "aac".to_string(),
                     audio_guid: audio["guid"].as_str().unwrap_or("").to_string(),
-                    subtitle_guid: String::new(),
+                    subtitle_guid: selected_subtitle_guid,
                     channels: audio["channels"].as_i64().unwrap_or(2) as i32,
                     duration: play_info.item.duration,
                 },

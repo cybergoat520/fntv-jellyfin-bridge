@@ -1,12 +1,12 @@
 @echo off
-REM 构建 jellyfin-web 并复制到 bridge-node\web\
+REM 构建 jellyfin-web 并打包为 bridge-rust\web.zip
 REM 用法: scripts\build-web.cmd
 
 setlocal enabledelayedexpansion
 
 set "ROOT_DIR=%~dp0.."
 set "WEB_SRC=%ROOT_DIR%\jellyfin-web"
-set "WEB_DEST=%ROOT_DIR%\bridge-node\web"
+set "ZIP_DEST=%ROOT_DIR%\bridge-rust\web.zip"
 
 echo === 构建 jellyfin-web ===
 
@@ -26,9 +26,11 @@ echo [2/3] 构建生产版本...
 call npx cross-env NODE_ENV=production webpack --config webpack.prod.js
 if errorlevel 1 exit /b 1
 
-echo [3/3] 复制到 bridge-node\web\...
-if exist "%WEB_DEST%" rmdir /s /q "%WEB_DEST%"
-xcopy /e /i /q "%WEB_SRC%\dist" "%WEB_DEST%"
+echo [3/3] 打包为 web.zip...
+if exist "%ZIP_DEST%" del "%ZIP_DEST%"
+cd /d "%WEB_SRC%\dist"
+powershell -Command "Compress-Archive -Path '.\*' -DestinationPath '%ZIP_DEST%' -Force"
 
 echo.
-echo 完成! Web UI 已输出到: %WEB_DEST%
+echo 完成! web.zip 已输出到: %ZIP_DEST%
+echo 将 web.zip 放到 bridge-rust 工作目录后重启服务即可自动解压。

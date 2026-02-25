@@ -95,7 +95,7 @@ fn map_audio_stream(audio: &serde_json::Value, index: i32) -> serde_json::Value 
 }
 
 /// 飞牛字幕流 → Jellyfin MediaStream
-fn map_subtitle_stream(ss: &serde_json::Value, index: i32) -> serde_json::Value {
+fn map_subtitle_stream(ss: &serde_json::Value, index: i32, is_external: bool) -> serde_json::Value {
     let is_text = !ss["is_bitmap"].as_bool().unwrap_or(false);
     let codec = ss["codec_name"].as_str()
         .or_else(|| ss["format"].as_str())
@@ -119,7 +119,7 @@ fn map_subtitle_stream(ss: &serde_json::Value, index: i32) -> serde_json::Value 
         "IsInterlaced": false,
         "IsDefault": is_default,
         "IsForced": ss["forced"].as_i64().unwrap_or(0) == 1,
-        "IsExternal": true,  // 只处理外挂字幕
+        "IsExternal": is_external,
         "Type": "Subtitle",
         "Index": index,
         "Title": if title.is_empty() { serde_json::Value::Null } else { json!(title) },
@@ -166,25 +166,25 @@ fn build_single_media_source(
         }
     }
 
-    // 字幕流 - 仅保留外挂字幕（内嵌字幕需 Range 抓取文件解析，开发成本高，暂不实现）
+    // 字幕流
     for ss in subtitle_streams {
         let is_external = ss["is_external"].as_i64().unwrap_or(0) == 1;
         
-        // 跳过内嵌字幕，只处理外挂字幕
-        if !is_external {
-            continue;
-        }
-        
         let sub_index = stream_index;
         stream_index += 1;
-        let mut sub_stream = map_subtitle_stream(ss, sub_index);
+        let mut sub_stream = map_subtitle_stream(ss, sub_index, is_external);
 
-        // 外挂字幕支持外部流传输
-        sub_stream["DeliveryMethod"] = json!("External");
-        sub_stream["DeliveryUrl"] = json!(format!(
-            "/Videos/{}/{}/Subtitles/{}/Stream.vtt",
-            media_guid, media_guid, sub_index
-        ));
+        if is_external {
+            // 外挂字幕：DeliveryMethod = External，通过 subtitle_stream handler 获取
+            sub_stream["DeliveryMethod"] = json!("External");
+            sub_stream["DeliveryUrl"] = json!(format!(
+                "/Videos/{}/{}/Subtitles/{}/Stream.vtt",
+                media_guid, media_guid, sub_index
+            ));
+        } else {
+            // 内置字幕：DeliveryMethod = Embed，通过 HLS 转码提取
+            sub_stream["DeliveryMethod"] = json!("Embed");
+        }
 
         media_streams.push(sub_stream);
 
@@ -200,7 +200,7 @@ fn build_single_media_source(
                         .or_else(|| ss["format"].as_str())
                         .unwrap_or("srt")
                         .to_string(),
-                    is_external: true,
+                    is_external,
                 });
             }
         }
@@ -252,7 +252,7 @@ fn build_single_media_source(
         BROWSER_COMPATIBLE_CODECS.contains(&codec.as_str())
     });
     let needs_transcoding = !audio_streams.is_empty() && !has_compatible_audio;
-    let transcoding_url = format!("/Videos/{}/hls/main.m3u8", media_guid);
+    let transcoding_url = format!("/Videos/{}/hls/preset.m3u8", media_guid);
 
     let mut source = json!({
         "Protocol": "Http",

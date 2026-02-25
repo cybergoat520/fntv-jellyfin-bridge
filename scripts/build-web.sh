@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 构建 jellyfin-web 并复制到 bridge-node/web/
+# 构建 jellyfin-web 并打包为 bridge-rust/web.zip
 # 用法: ./scripts/build-web.sh
 
 set -euo pipefail
@@ -7,7 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 WEB_SRC="$ROOT_DIR/jellyfin-web"
-WEB_DEST="$ROOT_DIR/bridge-node/web"
+ZIP_DEST="$ROOT_DIR/bridge-rust/web.zip"
 
 echo "=== 构建 jellyfin-web ==="
 
@@ -18,13 +18,6 @@ if [ ! -f "$WEB_SRC/package.json" ]; then
   exit 1
 fi
 
-# 检查 Node.js 版本
-NODE_VERSION=$(node -v | sed 's/v//' | cut -d. -f1)
-if [ "$NODE_VERSION" -lt 24 ]; then
-  echo "警告: jellyfin-web 要求 Node.js >= 24，当前版本: $(node -v)"
-  echo "建议使用 nvm 切换: nvm use 24"
-fi
-
 cd "$WEB_SRC"
 
 echo "[1/3] 安装依赖..."
@@ -33,11 +26,14 @@ npm ci
 echo "[2/3] 构建生产版本..."
 npx cross-env NODE_ENV=production webpack --config webpack.prod.js
 
-echo "[3/3] 复制到 bridge-node/web/..."
-rm -rf "$WEB_DEST"
-cp -r "$WEB_SRC/dist" "$WEB_DEST"
+echo "[3/3] 打包为 web.zip..."
+rm -f "$ZIP_DEST"
+cd "$WEB_SRC/dist"
+zip -r "$ZIP_DEST" .
 
 echo ""
-echo "完成! Web UI 已输出到: $WEB_DEST"
-echo "文件数: $(find "$WEB_DEST" -type f | wc -l)"
-echo "总大小: $(du -sh "$WEB_DEST" | cut -f1)"
+echo "完成! web.zip 已输出到: $ZIP_DEST"
+echo "文件数: $(find . -type f | wc -l)"
+echo "ZIP 大小: $(du -sh "$ZIP_DEST" | cut -f1)"
+echo ""
+echo "将 web.zip 放到 bridge-rust 工作目录后重启服务即可自动解压。"

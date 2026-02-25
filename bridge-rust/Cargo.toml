@@ -48,3 +48,6 @@ regex = "1"
 
 # Base64
 base64 = "0.22"
+
+# Zip extraction
+zip = "2"

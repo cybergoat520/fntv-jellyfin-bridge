@@ -11,7 +11,8 @@ use axum::{
 };
 use reqwest::Client;
 use serde::Deserialize;
-use tracing::{debug, error};
+use std::error::Error as StdError;
+use tracing::{debug, error, info};
 
 use crate::config::BridgeConfig;
 use crate::fnos_client::signature::generate_authx_string;
@@ -258,6 +259,8 @@ async fn hls_stream(
     Path((media_guid, file)): Path<(String, String)>,
     req: axum::extract::Request,
 ) -> Response {
+    info!("[HLS] hls_stream 收到请求: mediaGuid={}, file={}", media_guid, file);
+
     // 认证：先从请求获取 session
     let (token, _) = extract_token(&req);
     let session = token.as_ref().and_then(|t| get_session(t));
@@ -290,21 +293,107 @@ async fn hls_stream(
         }
     };
 
-    // 构建飞牛 HLS URL
-    let actual_file = if file == "main.m3u8" { "preset.m3u8" } else { &file };
+    // 构建飞牛 HLS URL（preset.m3u8 由 TranscodingUrl 直接请求，main.m3u8 不再映射）
+    let actual_file: &str = &file;
     let fnos_path = format!("/v/media/{}/{}", session_guid, actual_file);
     let target_url = format!("{}{}", fnos_server, fnos_path);
     let authx = generate_authx_string(&fnos_path, None);
 
     debug!(
-        "[HLS] 代理: mediaGuid={} → sessionGuid={}, file={}",
-        media_guid, session_guid, actual_file
+        "[HLS] 代理: file={}, sessionGuid={}",
+        actual_file, session_guid
     );
 
     let client = Client::builder()
         .danger_accept_invalid_certs(config.ignore_cert)
+        .timeout(std::time::Duration::from_secs(30))
         .build()
         .unwrap_or_default();
+
+    // VTT 字幕文件：缓冲代理 + 完整生命周期日志
+    if actual_file.ends_with(".vtt") {
+        let start = std::time::Instant::now();
+        info!("[VTT] ===== 开始 VTT 请求 =====");
+        info!("[VTT] target: {}", target_url);
+
+        // 用和 .ts 一样的认证方式，1秒超时
+        let req = client
+            .get(&target_url)
+            .header("Authorization", &fnos_token)
+            .header("Cookie", "mode=relay")
+            .header("Authx", &authx)
+            .timeout(std::time::Duration::from_secs(1))
+            .build();
+
+        let req = match req {
+            Ok(r) => r,
+            Err(e) => {
+                error!("[VTT] 构建请求失败: {} (耗时 {:?})", e, start.elapsed());
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        };
+
+        info!("[VTT] 请求头:");
+        info!("[VTT]   method={} url={}", req.method(), req.url());
+        for (name, value) in req.headers().iter() {
+            info!("[VTT]   {}: {:?}", name, value);
+        }
+
+        info!("[VTT] 发送请求中...");
+        match client.execute(req).await {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                info!("[VTT] 收到响应: status={} (耗时 {:?})", status, start.elapsed());
+                info!("[VTT] 响应头:");
+                for (name, value) in resp.headers().iter() {
+                    info!("[VTT]   {}: {:?}", name, value);
+                }
+
+                info!("[VTT] 读取响应体...");
+                match resp.bytes().await {
+                    Ok(body) => {
+                        info!("[VTT] 响应体大小: {} bytes (总耗时 {:?})", body.len(), start.elapsed());
+                        info!("[VTT] ===== VTT 请求完成 =====");
+                        return Response::builder()
+                            .status(status)
+                            .header("content-type", "text/vtt")
+                            .header("access-control-allow-origin", "*")
+                            .header("cache-control", "no-store, no-cache, must-revalidate")
+                            .body(Body::from(body))
+                            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+                    }
+                    Err(e) => {
+                        error!("[VTT] 读取响应体失败: {} (总耗时 {:?})", e, start.elapsed());
+                        return Response::builder()
+                            .status(200)
+                            .header("content-type", "text/vtt")
+                            .header("access-control-allow-origin", "*")
+                            .body(Body::from("WEBVTT\nX-TIMESTAMP-MAP=MPEGTS:0,LOCAL:00:00:00.000\n\n"))
+                            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+                    }
+                }
+            }
+            Err(e) => {
+                error!("[VTT] 请求失败/超时: {} (耗时 {:?})", e, start.elapsed());
+                if e.is_timeout() {
+                    error!("[VTT] 原因: 超时 (1秒)");
+                }
+                if e.is_connect() {
+                    error!("[VTT] 原因: 连接失败");
+                }
+                if let Some(source) = e.source() {
+                    error!("[VTT] 底层错误: {}", source);
+                }
+                // 超时/失败返回空 VTT，避免 HLS.js 报错
+                return Response::builder()
+                    .status(200)
+                    .header("content-type", "text/vtt")
+                    .header("access-control-allow-origin", "*")
+                    .body(Body::from("WEBVTT\nX-TIMESTAMP-MAP=MPEGTS:0,LOCAL:00:00:00.000\n\n"))
+                    .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+            }
+        }
+    }
 
     let upstream_req = client
         .get(&target_url)
