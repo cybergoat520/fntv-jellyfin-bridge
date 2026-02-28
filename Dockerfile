@@ -1,4 +1,4 @@
-FROM rust:1.83-alpine AS builder
+FROM rust:1.85-alpine AS builder
 
 # 网络重试设置
 ENV CARGO_NET_RETRY=10
