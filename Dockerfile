@@ -6,13 +6,11 @@ ENV CARGO_HTTP_TIMEOUT=300
 
 RUN apk add --no-cache musl-dev openssl-dev pkgconfig git
 
-WORKDIR /app
+# 拉取代码
+RUN git clone --depth 1 https://github.com/notxx/fntv-jellyfin-bridge.git /tmp/repo
 
-# 拉取代码（包含 Cargo.toml）
-RUN git clone --depth 1 https://github.com/notxx/fntv-jellyfin-bridge.git /tmp/repo && \
-    cp -r /tmp/repo/bridge-rust/* /app/
-
-# 编译（保留 Cargo.lock）
+# 在代码目录构建
+WORKDIR /tmp/repo/bridge-rust
 RUN cargo build --release
 
 FROM alpine:3.21
@@ -21,7 +19,7 @@ RUN apk add --no-cache ca-certificates
 
 WORKDIR /app
 
-COPY --from=builder /app/target/release/fnos-bridge /usr/local/bin/fnos-bridge
+COPY --from=builder /tmp/repo/bridge-rust/target/release/fnos-bridge /usr/local/bin/fnos-bridge
 
 VOLUME /app/web
 EXPOSE 8096
