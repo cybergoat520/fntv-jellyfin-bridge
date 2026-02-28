@@ -1,0 +1,25 @@
+services:
+  fntv:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: fnos-bridge:rust
+    container_name: fntv
+    ports:
+      - "8096:8096"
+    environment:
+      - BRIDGE_PORT=8096
+      - BRIDGE_HOST=0.0.0.0
+      - FNOS_SERVER=http://192.168.31.2:5666
+      - FNOS_IGNORE_CERT=false
+      - SERVER_NAME=1005nas
+      - RUST_LOG=info
+    volumes:
+      - ./web:/app/web:ro
+    restart: unless-stopped
+    networks:
+      - fntv-net
+
+networks:
+  fntv-net:
+    driver: bridge
